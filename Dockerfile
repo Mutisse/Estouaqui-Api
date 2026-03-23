@@ -1,6 +1,6 @@
-FROM php:8.2-apache
+FROM php:8.3-apache
 
-# Install system dependencies (apenas os essenciais)
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
     curl \
@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions (usando versões pré-compiladas)
+# Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath
 
 # Enable Apache mod_rewrite
@@ -31,9 +31,8 @@ COPY . .
 RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf && \
     sed -i '/<Directory \/var\/www\/html>/a \ \ \ \ Options Indexes FollowSymLinks\n \ \ \ \ AllowOverride All\n \ \ \ \ Require all granted' /etc/apache2/apache2.conf
 
-# Install PHP dependencies (apenas produção, sem dev)
-RUN composer install --no-interaction --optimize-autoloader --no-dev --no-scripts && \
-    composer dump-autoload --optimize
+# Install PHP dependencies
+RUN composer install --no-interaction --optimize-autoloader --no-dev
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache && \
