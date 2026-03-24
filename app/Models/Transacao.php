@@ -9,6 +9,9 @@ class Transacao extends Model
 {
     use HasFactory;
 
+    // ✅ ADICIONE ESTA LINHA
+    protected $table = 'transacoes';
+
     protected $fillable = [
         'numero',
         'user_id',
@@ -27,7 +30,6 @@ class Transacao extends Model
         'data_confirmacao' => 'datetime',
     ];
 
-    // Gerar número único para transação
     public static function boot()
     {
         parent::boot();
@@ -37,7 +39,6 @@ class Transacao extends Model
         });
     }
 
-    // Relacionamentos
     public function user()
     {
         return $this->belongsTo(User::class);

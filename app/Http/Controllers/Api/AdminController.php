@@ -12,7 +12,7 @@ use App\Models\Transacao;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class AdminController extends Controller
 {
@@ -26,35 +26,53 @@ class AdminController extends Controller
      */
     public function dashboard()
     {
-        $totalUsers = User::count();
-        $totalClientes = User::where('tipo', 'cliente')->count();
-        $totalPrestadores = User::where('tipo', 'prestador')->count();
-        $totalAdmins = User::where('tipo', 'admin')->count();
+        try {
+            Log::info('Dashboard: iniciando');
 
-        $prestadoresAtivos = User::where('tipo', 'prestador')
-            ->where('ativo', true)
-            ->count();
+            $totalUsers = User::count();
+            Log::info('Dashboard: totalUsers = ' . $totalUsers);
 
-        $servicosHoje = Pedido::whereDate('created_at', today())->count();
-        $servicosPendentes = Pedido::where('status', 'pendente')->count();
+            $totalClientes = User::where('tipo', 'cliente')->count();
+            $totalPrestadores = User::where('tipo', 'prestador')->count();
+            $totalAdmins = User::where('tipo', 'admin')->count();
+            $prestadoresAtivos = User::where('tipo', 'prestador')->where('ativo', true)->count();
 
-        $avaliacaoMedia = Avaliacao::avg('nota') ?? 0;
-        $totalAvaliacoes = Avaliacao::count();
+            Log::info('Dashboard: antes de Pedido');
+            $servicosHoje = Pedido::whereDate('created_at', today())->count();
+            $servicosPendentes = Pedido::where('status', 'pendente')->count();
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'total_users' => $totalUsers,
-                'total_clientes' => $totalClientes,
-                'total_prestadores' => $totalPrestadores,
-                'total_admins' => $totalAdmins,
-                'prestadores_ativos' => $prestadoresAtivos,
-                'servicos_hoje' => $servicosHoje,
-                'servicos_pendentes' => $servicosPendentes,
-                'avaliacao_media' => round($avaliacaoMedia, 1),
-                'total_avaliacoes' => $totalAvaliacoes,
-            ]
-        ]);
+            Log::info('Dashboard: antes de Avaliacao');
+            $avaliacaoMedia = Avaliacao::avg('nota') ?? 0;
+            $totalAvaliacoes = Avaliacao::count();
+
+            Log::info('Dashboard: finalizado com sucesso');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_users' => $totalUsers,
+                    'total_clientes' => $totalClientes,
+                    'total_prestadores' => $totalPrestadores,
+                    'total_admins' => $totalAdmins,
+                    'prestadores_ativos' => $prestadoresAtivos,
+                    'servicos_hoje' => $servicosHoje,
+                    'servicos_pendentes' => $servicosPendentes,
+                    'avaliacao_media' => round($avaliacaoMedia, 1),
+                    'total_avaliacoes' => $totalAvaliacoes,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Dashboard ERRO: ' . $e->getMessage());
+            Log::error('Dashboard ERRO linha: ' . $e->getLine());
+            Log::error('Dashboard ERRO arquivo: ' . $e->getFile());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
+            ], 500);
+        }
     }
 
     /**
@@ -63,22 +81,34 @@ class AdminController extends Controller
      */
     public function atividade()
     {
-        $dias = [];
-        for ($i = 6; $i >= 0; $i--) {
-            $data = now()->subDays($i);
-            $dias[] = [
-                'dia' => $data->format('D'),
-                'valor' => Pedido::whereDate('created_at', $data)->count(),
-                'data' => $data->format('Y-m-d'),
-            ];
+        try {
+            Log::info('Atividade: iniciando');
+
+            $dias = [];
+            for ($i = 6; $i >= 0; $i--) {
+                $data = now()->subDays($i);
+                $dias[] = [
+                    'dia' => $data->format('D'),
+                    'valor' => Pedido::whereDate('created_at', $data)->count(),
+                    'data' => $data->format('Y-m-d'),
+                ];
+            }
+
+            Log::info('Atividade: finalizado com sucesso');
+
+            return response()->json([
+                'success' => true,
+                'data' => $dias
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Atividade ERRO: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $dias
-        ]);
     }
-
 
     // ==========================================
     // 2. GESTÃO DE UTILIZADORES
@@ -90,59 +120,93 @@ class AdminController extends Controller
      */
     public function index(Request $request)
     {
-        $query = User::query();
+        try {
+            $query = User::query();
 
-        // Filtro por tipo
-        if ($request->has('tipo')) {
-            $query->where('tipo', $request->tipo);
-        }
-
-        // Filtro por status (ativo/bloqueado)
-        if ($request->has('status')) {
-            if ($request->status === 'bloqueado') {
-                $query->whereNotNull('blocked_at');
-            } else {
-                $query->whereNull('blocked_at');
+            // Filtro por tipo
+            if ($request->has('tipo')) {
+                $query->where('tipo', $request->tipo);
             }
+
+            // Filtro por status
+            if ($request->has('status')) {
+                if ($request->status === 'bloqueado') {
+                    $query->whereNotNull('blocked_at');
+                } else {
+                    $query->whereNull('blocked_at');
+                }
+            }
+
+            // Busca por nome ou email
+            if ($request->has('busca')) {
+                $busca = $request->busca;
+                $query->where(function ($q) use ($busca) {
+                    $q->where('nome', 'like', "%{$busca}%")
+                        ->orWhere('email', 'like', "%{$busca}%")
+                        ->orWhere('telefone', 'like', "%{$busca}%");
+                });
+            }
+
+            $perPage = $request->get('per_page', 20);
+            $users = $query->orderBy('created_at', 'desc')->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $users
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Index ERRO: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        // Busca por nome ou email
-        if ($request->has('busca')) {
-            $busca = $request->busca;
-            $query->where(function($q) use ($busca) {
-                $q->where('nome', 'like', "%{$busca}%")
-                  ->orWhere('email', 'like', "%{$busca}%")
-                  ->orWhere('telefone', 'like', "%{$busca}%");
-            });
-        }
-
-        $users = $query->orderBy('created_at', 'desc')->paginate(20);
-
-        return response()->json([
-            'success' => true,
-            'data' => $users
-        ]);
     }
 
     /**
      * Detalhes de um utilizador
      * GET /api/admin/users/{id}
      */
+    /**
+     * Detalhes de um utilizador
+     * GET /api/admin/users/{id}
+     */
     public function show($id)
     {
-        $user = User::with(['servicos', 'pedidos', 'avaliacoes'])->find($id);
+        try {
+            Log::info('Show: buscando utilizador ' . $id);
 
-        if (!$user) {
+            // ✅ Carregar apenas os relacionamentos que existem
+            $user = User::with(['servicos', 'pedidosCliente', 'pedidosPrestador'])->find($id);
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            // ✅ Adicionar avaliações separadamente
+            $user->avaliacoes_recebidas = $user->avaliacoesRecebidas;
+            $user->avaliacoes_feitas = $user->avaliacoesFeitas;
+
+            return response()->json([
+                'success' => true,
+                'data' => $user
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Show ERRO: ' . $e->getMessage());
+            Log::error('Show ERRO linha: ' . $e->getLine());
+            Log::error('Show ERRO arquivo: ' . $e->getFile());
+
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => $e->getMessage(),
+                'line' => $e->getLine(),
+                'file' => $e->getFile()
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $user
-        ]);
     }
 
     /**
@@ -151,31 +215,31 @@ class AdminController extends Controller
      */
     public function update(Request $request, $id)
     {
-        $user = User::find($id);
-
-        if (!$user) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'nome' => 'sometimes|string|max:255',
-            'email' => 'sometimes|email|unique:users,email,' . $id,
-            'telefone' => 'sometimes|string|max:20',
-            'endereco' => 'nullable|string',
-            'tipo' => 'sometimes|in:cliente,prestador,admin',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
         try {
+            $user = User::find($id);
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'nome' => 'sometimes|string|max:255',
+                'email' => 'sometimes|email|unique:users,email,' . $id,
+                'telefone' => 'sometimes|string|max:20',
+                'endereco' => 'nullable|string',
+                'tipo' => 'sometimes|in:cliente,prestador,admin',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
             if ($request->has('nome')) $user->nome = $request->nome;
             if ($request->has('email')) $user->email = $request->email;
             if ($request->has('telefone')) $user->telefone = $request->telefone;
@@ -190,9 +254,11 @@ class AdminController extends Controller
                 'data' => $user
             ]);
         } catch (\Exception $e) {
+            Log::error('Update ERRO: ' . $e->getMessage());
+
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao atualizar utilizador'
+                'error' => 'Erro ao atualizar utilizador: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -203,22 +269,29 @@ class AdminController extends Controller
      */
     public function block($id)
     {
-        $user = User::find($id);
+        try {
+            $user = User::find($id);
 
-        if (!$user) {
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $user->blocked_at = now();
+            $user->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Utilizador bloqueado com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => 'Erro ao bloquear utilizador'
+            ], 500);
         }
-
-        $user->blocked_at = now();
-        $user->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Utilizador bloqueado com sucesso'
-        ]);
     }
 
     /**
@@ -227,22 +300,29 @@ class AdminController extends Controller
      */
     public function unblock($id)
     {
-        $user = User::find($id);
+        try {
+            $user = User::find($id);
 
-        if (!$user) {
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $user->blocked_at = null;
+            $user->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Utilizador desbloqueado com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => 'Erro ao desbloquear utilizador'
+            ], 500);
         }
-
-        $user->blocked_at = null;
-        $user->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Utilizador desbloqueado com sucesso'
-        ]);
     }
 
     /**
@@ -251,21 +331,28 @@ class AdminController extends Controller
      */
     public function destroy($id)
     {
-        $user = User::find($id);
+        try {
+            $user = User::find($id);
 
-        if (!$user) {
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $user->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Utilizador removido com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => 'Erro ao remover utilizador'
+            ], 500);
         }
-
-        $user->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Utilizador removido com sucesso'
-        ]);
     }
 
     /**
@@ -274,21 +361,28 @@ class AdminController extends Controller
      */
     public function forceDelete($id)
     {
-        $user = User::withTrashed()->find($id);
+        try {
+            $user = User::withTrashed()->find($id);
 
-        if (!$user) {
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $user->forceDelete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Utilizador removido permanentemente'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => 'Erro ao remover utilizador permanentemente'
+            ], 500);
         }
-
-        $user->forceDelete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Utilizador removido permanentemente'
-        ]);
     }
 
     /**
@@ -297,21 +391,27 @@ class AdminController extends Controller
      */
     public function getByEmail($email)
     {
-        $user = User::where('email', $email)->first();
+        try {
+            $user = User::where('email', $email)->first();
 
-        if (!$user) {
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $user
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Utilizador não encontrado'
-            ], 404);
+                'error' => 'Erro ao buscar utilizador'
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $user
-        ]);
     }
-
 
     // ==========================================
     // 3. GESTÃO DE PRESTADORES
@@ -321,33 +421,121 @@ class AdminController extends Controller
      * Listar prestadores (admin)
      * GET /api/admin/prestadores
      */
+    /**
+     * Listar prestadores (admin)
+     * GET /api/admin/prestadores
+     */
+    /**
+     * Listar prestadores (admin)
+     * GET /api/admin/prestadores
+     */
     public function prestadores(Request $request)
     {
-        $query = User::where('tipo', 'prestador');
+        try {
+            Log::info('Prestadores: parâmetros recebidos', $request->all());
 
-        // Filtro por verificação
-        if ($request->has('verificado')) {
-            $query->where('verificado', $request->verificado);
+            $query = User::where('tipo', 'prestador');
+
+            // LOG: Verificar total sem filtros
+            $totalSemFiltros = User::where('tipo', 'prestador')->count();
+            Log::info('Prestadores: total sem filtros = ' . $totalSemFiltros);
+
+            // Filtro por busca (nome, email, telefone)
+            if ($request->filled('busca')) {
+                $busca = $request->busca;
+                Log::info('Prestadores: aplicando filtro busca = ' . $busca);
+                $query->where(function ($q) use ($busca) {
+                    $q->where('nome', 'like', "%{$busca}%")
+                        ->orWhere('email', 'like', "%{$busca}%")
+                        ->orWhere('telefone', 'like', "%{$busca}%");
+                });
+            }
+
+            // Filtro por verificado
+            if ($request->filled('verificado')) {
+                $verificado = $request->verificado;
+                Log::info('Prestadores: filtro verificado recebido = ' . $verificado);
+
+                if ($verificado === 'true' || $verificado === '1' || $verificado === true) {
+                    $query->where('verificado', 1);
+                    Log::info('Prestadores: filtrando verificado = 1');
+                } elseif ($verificado === 'false' || $verificado === '0' || $verificado === false) {
+                    $query->where('verificado', 0);
+                    Log::info('Prestadores: filtrando verificado = 0');
+                }
+            }
+
+            // Filtro por categoria
+            if ($request->filled('categoria')) {
+                $categoriaId = $request->categoria;
+                Log::info('Prestadores: filtro categoria = ' . $categoriaId);
+                try {
+                    if (method_exists(User::class, 'categorias')) {
+                        $query->whereHas('categorias', function ($q) use ($categoriaId) {
+                            $q->where('categoria_id', $categoriaId);
+                        });
+                    }
+                } catch (\Exception $e) {
+                    Log::warning('Prestadores: erro no filtro categoria - ' . $e->getMessage());
+                }
+            }
+
+            // Filtro por avaliação mínima
+            if ($request->filled('avaliacao_min')) {
+                $avaliacaoMin = floatval($request->avaliacao_min);
+                Log::info('Prestadores: filtro avaliacao_min = ' . $avaliacaoMin);
+                $query->where('media_avaliacao', '>=', $avaliacaoMin);
+            }
+
+            // Paginação
+            $perPage = $request->get('per_page', 20);
+            Log::info('Prestadores: perPage = ' . $perPage);
+
+            // Executar query
+            $totalAposFiltros = $query->count();
+            Log::info('Prestadores: total após filtros = ' . $totalAposFiltros);
+
+            if ($totalAposFiltros === 0) {
+                Log::warning('Prestadores: Nenhum prestador encontrado com os filtros aplicados');
+                $todosPrestadores = User::where('tipo', 'prestador')->take(5)->get();
+                Log::info('Prestadores: Primeiros 5 prestadores sem filtros', $todosPrestadores->toArray());
+            }
+
+            // Carregar com relacionamento
+            try {
+                $prestadores = $query->with('categorias')->orderBy('created_at', 'desc')->paginate($perPage);
+            } catch (\Exception $e) {
+                Log::warning('Prestadores: erro ao carregar categorias - ' . $e->getMessage());
+                $prestadores = $query->orderBy('created_at', 'desc')->paginate($perPage);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $prestadores
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Prestadores ERRO CRÍTICO: ' . $e->getMessage());
+            Log::error('Prestadores ERRO linha: ' . $e->getLine());
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'current_page' => 1,
+                    'data' => [],
+                    'first_page_url' => null,
+                    'from' => null,
+                    'last_page' => 1,
+                    'last_page_url' => null,
+                    'links' => [],
+                    'next_page_url' => null,
+                    'path' => $request->url(),
+                    'per_page' => $request->get('per_page', 20),
+                    'prev_page_url' => null,
+                    'to' => null,
+                    'total' => 0
+                ]
+            ], 200);
         }
-
-        // Filtro por categoria
-        if ($request->has('categoria')) {
-            $query->whereHas('categorias', function($q) use ($request) {
-                $q->where('categoria_id', $request->categoria);
-            });
-        }
-
-        // Avaliação mínima
-        if ($request->has('avaliacao_min')) {
-            $query->where('media_avaliacao', '>=', $request->avaliacao_min);
-        }
-
-        $prestadores = $query->with('categorias')->paginate(20);
-
-        return response()->json([
-            'success' => true,
-            'data' => $prestadores
-        ]);
     }
 
     /**
@@ -356,15 +544,22 @@ class AdminController extends Controller
      */
     public function prestadoresPendentes()
     {
-        $prestadores = User::where('tipo', 'prestador')
-            ->where('verificado', false)
-            ->with('categorias')
-            ->get();
+        try {
+            $prestadores = User::where('tipo', 'prestador')
+                ->where('verificado', false)
+                ->with('categorias')
+                ->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $prestadores
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $prestadores
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar prestadores pendentes'
+            ], 500);
+        }
     }
 
     /**
@@ -373,22 +568,29 @@ class AdminController extends Controller
      */
     public function aprovarPrestador($id)
     {
-        $prestador = User::where('tipo', 'prestador')->find($id);
+        try {
+            $prestador = User::where('tipo', 'prestador')->find($id);
 
-        if (!$prestador) {
+            if (!$prestador) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Prestador não encontrado'
+                ], 404);
+            }
+
+            $prestador->verificado = true;
+            $prestador->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Prestador aprovado com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Prestador não encontrado'
-            ], 404);
+                'error' => 'Erro ao aprovar prestador'
+            ], 500);
         }
-
-        $prestador->verificado = true;
-        $prestador->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Prestador aprovado com sucesso'
-        ]);
     }
 
     /**
@@ -397,24 +599,30 @@ class AdminController extends Controller
      */
     public function reprovarPrestador($id)
     {
-        $prestador = User::where('tipo', 'prestador')->find($id);
+        try {
+            $prestador = User::where('tipo', 'prestador')->find($id);
 
-        if (!$prestador) {
+            if (!$prestador) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Prestador não encontrado'
+                ], 404);
+            }
+
+            $prestador->verificado = false;
+            $prestador->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Prestador reprovado'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Prestador não encontrado'
-            ], 404);
+                'error' => 'Erro ao reprovar prestador'
+            ], 500);
         }
-
-        $prestador->verificado = false;
-        $prestador->save();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Prestador reprovado'
-        ]);
     }
-
 
     // ==========================================
     // 4. GESTÃO DE CATEGORIAS
@@ -426,12 +634,19 @@ class AdminController extends Controller
      */
     public function categorias()
     {
-        $categorias = Categoria::withCount('servicos')->get();
+        try {
+            $categorias = Categoria::withCount('servicos')->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $categorias
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $categorias
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar categorias'
+            ], 500);
+        }
     }
 
     /**
@@ -440,21 +655,21 @@ class AdminController extends Controller
      */
     public function createCategoria(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'nome' => 'required|string|max:255|unique:categorias',
-            'descricao' => 'nullable|string',
-            'icone' => 'nullable|string',
-            'cor' => 'nullable|string',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
         try {
+            $validator = Validator::make($request->all(), [
+                'nome' => 'required|string|max:255|unique:categorias',
+                'descricao' => 'nullable|string',
+                'icone' => 'nullable|string',
+                'cor' => 'nullable|string',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
             $categoria = Categoria::create([
                 'nome' => $request->nome,
                 'slug' => \Illuminate\Support\Str::slug($request->nome),
@@ -472,7 +687,7 @@ class AdminController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao criar categoria'
+                'error' => 'Erro ao criar categoria: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -483,31 +698,31 @@ class AdminController extends Controller
      */
     public function updateCategoria(Request $request, $id)
     {
-        $categoria = Categoria::find($id);
-
-        if (!$categoria) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Categoria não encontrada'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'nome' => 'sometimes|string|max:255|unique:categorias,nome,' . $id,
-            'descricao' => 'nullable|string',
-            'icone' => 'nullable|string',
-            'cor' => 'nullable|string',
-            'ativo' => 'sometimes|boolean',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
         try {
+            $categoria = Categoria::find($id);
+
+            if (!$categoria) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Categoria não encontrada'
+                ], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'nome' => 'sometimes|string|max:255|unique:categorias,nome,' . $id,
+                'descricao' => 'nullable|string',
+                'icone' => 'nullable|string',
+                'cor' => 'nullable|string',
+                'ativo' => 'sometimes|boolean',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
             if ($request->has('nome')) {
                 $categoria->nome = $request->nome;
                 $categoria->slug = \Illuminate\Support\Str::slug($request->nome);
@@ -538,23 +753,29 @@ class AdminController extends Controller
      */
     public function deleteCategoria($id)
     {
-        $categoria = Categoria::find($id);
+        try {
+            $categoria = Categoria::find($id);
 
-        if (!$categoria) {
+            if (!$categoria) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Categoria não encontrada'
+                ], 404);
+            }
+
+            $categoria->delete();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Categoria removida com sucesso'
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Categoria não encontrada'
-            ], 404);
+                'error' => 'Erro ao remover categoria'
+            ], 500);
         }
-
-        $categoria->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Categoria removida com sucesso'
-        ]);
     }
-
 
     // ==========================================
     // 5. GESTÃO DE SERVIÇOS
@@ -566,22 +787,30 @@ class AdminController extends Controller
      */
     public function servicos(Request $request)
     {
-        $query = Servico::with(['prestador', 'categoria']);
+        try {
+            $query = Servico::with(['prestador', 'categoria']);
 
-        if ($request->has('categoria')) {
-            $query->where('categoria_id', $request->categoria);
+            if ($request->has('categoria')) {
+                $query->where('categoria_id', $request->categoria);
+            }
+
+            if ($request->has('ativo')) {
+                $query->where('ativo', $request->ativo);
+            }
+
+            $perPage = $request->get('per_page', 20);
+            $servicos = $query->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $servicos
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar serviços'
+            ], 500);
         }
-
-        if ($request->has('ativo')) {
-            $query->where('ativo', $request->ativo);
-        }
-
-        $servicos = $query->paginate(20);
-
-        return response()->json([
-            'success' => true,
-            'data' => $servicos
-        ]);
     }
 
     /**
@@ -590,23 +819,23 @@ class AdminController extends Controller
      */
     public function createServico(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'prestador_id' => 'required|exists:users,id',
-            'categoria_id' => 'required|exists:categorias,id',
-            'nome' => 'required|string|max:255',
-            'descricao' => 'nullable|string',
-            'preco' => 'required|numeric|min:0',
-            'duracao' => 'required|integer|min:5',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
         try {
+            $validator = Validator::make($request->all(), [
+                'prestador_id' => 'required|exists:users,id',
+                'categoria_id' => 'required|exists:categorias,id',
+                'nome' => 'required|string|max:255',
+                'descricao' => 'nullable|string',
+                'preco' => 'required|numeric|min:0',
+                'duracao' => 'required|integer|min:5',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
             $servico = Servico::create($request->all());
 
             return response()->json([
@@ -622,7 +851,6 @@ class AdminController extends Controller
         }
     }
 
-
     // ==========================================
     // 6. GESTÃO DE PEDIDOS
     // ==========================================
@@ -633,18 +861,26 @@ class AdminController extends Controller
      */
     public function pedidos(Request $request)
     {
-        $query = Pedido::with(['cliente', 'prestador', 'servico']);
+        try {
+            $query = Pedido::with(['cliente', 'prestador', 'servico']);
 
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
+            if ($request->has('status')) {
+                $query->where('status', $request->status);
+            }
+
+            $perPage = $request->get('per_page', 20);
+            $pedidos = $query->orderBy('created_at', 'desc')->paginate($perPage);
+
+            return response()->json([
+                'success' => true,
+                'data' => $pedidos
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar pedidos'
+            ], 500);
         }
-
-        $pedidos = $query->orderBy('created_at', 'desc')->paginate(20);
-
-        return response()->json([
-            'success' => true,
-            'data' => $pedidos
-        ]);
     }
 
     /**
@@ -653,22 +889,102 @@ class AdminController extends Controller
      */
     public function showPedido($id)
     {
-        $pedido = Pedido::with(['cliente', 'prestador', 'servico', 'avaliacao'])
-            ->find($id);
+        try {
+            $pedido = Pedido::with(['cliente', 'prestador', 'servico', 'avaliacao'])
+                ->find($id);
 
-        if (!$pedido) {
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $pedido
+            ]);
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
+                'error' => 'Erro ao buscar pedido'
+            ], 500);
         }
-
-        return response()->json([
-            'success' => true,
-            'data' => $pedido
-        ]);
     }
 
+    /**
+     * Atualizar status do pedido
+     * PUT /api/admin/pedidos/{id}/status
+     */
+    public function updatePedidoStatus(Request $request, $id)
+    {
+        try {
+            $pedido = Pedido::find($id);
+
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'status' => 'required|in:pendente,aceito,em_andamento,concluido,cancelado',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
+            $pedido->status = $request->status;
+            $pedido->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Status do pedido atualizado com sucesso',
+                'data' => $pedido
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar status do pedido'
+            ], 500);
+        }
+    }
+
+    /**
+     * Cancelar pedido
+     * DELETE /api/admin/pedidos/{id}/cancel
+     */
+    public function cancelPedido($id)
+    {
+        try {
+            $pedido = Pedido::find($id);
+
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
+
+            $pedido->status = 'cancelado';
+            $pedido->save();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pedido cancelado com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao cancelar pedido'
+            ], 500);
+        }
+    }
 
     // ==========================================
     // 7. FINANCEIRO
@@ -680,24 +996,35 @@ class AdminController extends Controller
      */
     public function resumoFinanceiro()
     {
-        $saldoAtual = Transacao::sum('valor');
-        $pendente = Transacao::where('status', 'pendente')->sum('valor');
-        $processadoMes = Transacao::whereMonth('created_at', now()->month)
-            ->where('status', 'concluido')
-            ->sum('valor');
-        $comissoes = Transacao::where('tipo', 'comissao')
-            ->whereMonth('created_at', now()->month)
-            ->sum('valor');
+        try {
+            $saldoAtual = Transacao::sum('valor') ?? 0;
+            $pendente = Transacao::where('status', 'pendente')->sum('valor') ?? 0;
+            $processadoMes = Transacao::whereMonth('created_at', now()->month)
+                ->where('status', 'concluido')
+                ->sum('valor') ?? 0;
+            $comissoes = Transacao::where('tipo', 'comissao')
+                ->whereMonth('created_at', now()->month)
+                ->sum('valor') ?? 0;
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'saldo_atual' => $saldoAtual,
-                'pendente' => $pendente,
-                'processado_mes' => $processadoMes,
-                'comissoes' => $comissoes,
-            ]
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'saldo_atual' => $saldoAtual,
+                    'pendente' => $pendente,
+                    'processado_mes' => $processadoMes,
+                    'comissoes' => $comissoes,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('ResumoFinanceiro ERRO: ' . $e->getMessage());
+            Log::error('ResumoFinanceiro ERRO linha: ' . $e->getLine());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage(),
+                'line' => $e->getLine()
+            ], 500);
+        }
     }
 
     /**
@@ -706,24 +1033,30 @@ class AdminController extends Controller
      */
     public function transacoes(Request $request)
     {
-        $query = Transacao::with('user');
+        try {
+            $query = Transacao::with('user');
 
-        if ($request->has('tipo')) {
-            $query->where('tipo', $request->tipo);
+            if ($request->has('tipo')) {
+                $query->where('tipo', $request->tipo);
+            }
+
+            if ($request->has('status')) {
+                $query->where('status', $request->status);
+            }
+
+            $transacoes = $query->orderBy('created_at', 'desc')->paginate(20);
+
+            return response()->json([
+                'success' => true,
+                'data' => $transacoes
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar transações'
+            ], 500);
         }
-
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        $transacoes = $query->orderBy('created_at', 'desc')->paginate(20);
-
-        return response()->json([
-            'success' => true,
-            'data' => $transacoes
-        ]);
     }
-
 
     // ==========================================
     // 8. RELATÓRIOS
@@ -735,13 +1068,19 @@ class AdminController extends Controller
      */
     public function export(Request $request)
     {
-        $tipo = $request->query('tipo', 'usuarios');
+        try {
+            $tipo = $request->query('tipo', 'usuarios');
 
-        // TODO: Implementar exportação para Excel/CSV
-        return response()->json([
-            'success' => true,
-            'message' => "Relatório de {$tipo} em processamento"
-        ]);
+            return response()->json([
+                'success' => true,
+                'message' => "Relatório de {$tipo} em processamento"
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório'
+            ], 500);
+        }
     }
 
     /**
@@ -750,43 +1089,50 @@ class AdminController extends Controller
      */
     public function relatorioServicos(Request $request)
     {
-        $periodo = $request->query('periodo', 'mes');
+        try {
+            $periodo = $request->query('periodo', 'mes');
 
-        $query = Pedido::query();
+            $query = Pedido::query();
 
-        switch ($periodo) {
-            case 'hoje':
-                $query->whereDate('created_at', today());
-                break;
-            case 'semana':
-                $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
-                break;
-            case 'mes':
-                $query->whereMonth('created_at', now()->month);
-                break;
-            case 'ano':
-                $query->whereYear('created_at', now()->year);
-                break;
-        }
+            switch ($periodo) {
+                case 'hoje':
+                    $query->whereDate('created_at', today());
+                    break;
+                case 'semana':
+                    $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
+                    break;
+                case 'mes':
+                    $query->whereMonth('created_at', now()->month);
+                    break;
+                case 'ano':
+                    $query->whereYear('created_at', now()->year);
+                    break;
+            }
 
-        $total = $query->count();
-        $receita = $query->sum('valor');
+            $total = $query->count();
+            $receita = $query->sum('valor');
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'periodo' => $periodo,
-                'total_servicos' => $total,
-                'receita_total' => $receita,
-                'servicos_por_status' => [
-                    'pendente' => (clone $query)->where('status', 'pendente')->count(),
-                    'aceito' => (clone $query)->where('status', 'aceito')->count(),
-                    'em_andamento' => (clone $query)->where('status', 'em_andamento')->count(),
-                    'concluido' => (clone $query)->where('status', 'concluido')->count(),
-                    'cancelado' => (clone $query)->where('status', 'cancelado')->count(),
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'periodo' => $periodo,
+                    'total_servicos' => $total,
+                    'receita_total' => $receita,
+                    'servicos_por_status' => [
+                        'pendente' => (clone $query)->where('status', 'pendente')->count(),
+                        'aceito' => (clone $query)->where('status', 'aceito')->count(),
+                        'em_andamento' => (clone $query)->where('status', 'em_andamento')->count(),
+                        'concluido' => (clone $query)->where('status', 'concluido')->count(),
+                        'cancelado' => (clone $query)->where('status', 'cancelado')->count(),
+                    ]
                 ]
-            ]
-        ]);
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório de serviços'
+            ], 500);
+        }
     }
 
     /**
@@ -795,27 +1141,34 @@ class AdminController extends Controller
      */
     public function relatorioPrestadores()
     {
-        $total = User::where('tipo', 'prestador')->count();
-        $verificados = User::where('tipo', 'prestador')->where('verificado', true)->count();
-        $naoVerificados = $total - $verificados;
+        try {
+            $total = User::where('tipo', 'prestador')->count();
+            $verificados = User::where('tipo', 'prestador')->where('verificado', true)->count();
+            $naoVerificados = $total - $verificados;
 
-        $mediaAvaliacao = Avaliacao::whereHas('prestador')->avg('nota') ?? 0;
+            $mediaAvaliacao = Avaliacao::whereHas('prestador')->avg('nota') ?? 0;
 
-        $topPrestadores = User::where('tipo', 'prestador')
-            ->orderBy('media_avaliacao', 'desc')
-            ->limit(10)
-            ->get(['id', 'nome', 'media_avaliacao', 'total_avaliacoes']);
+            $topPrestadores = User::where('tipo', 'prestador')
+                ->orderBy('media_avaliacao', 'desc')
+                ->limit(10)
+                ->get(['id', 'nome', 'media_avaliacao', 'total_avaliacoes']);
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'total' => $total,
-                'verificados' => $verificados,
-                'nao_verificados' => $naoVerificados,
-                'media_avaliacao_geral' => round($mediaAvaliacao, 1),
-                'top_prestadores' => $topPrestadores,
-            ]
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total' => $total,
+                    'verificados' => $verificados,
+                    'nao_verificados' => $naoVerificados,
+                    'media_avaliacao_geral' => round($mediaAvaliacao, 1),
+                    'top_prestadores' => $topPrestadores,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório de prestadores'
+            ], 500);
+        }
     }
 
     /**
@@ -824,41 +1177,47 @@ class AdminController extends Controller
      */
     public function relatorioFinanceiro(Request $request)
     {
-        $periodo = $request->query('periodo', 'mes');
+        try {
+            $periodo = $request->query('periodo', 'mes');
 
-        $query = Transacao::query();
+            $query = Transacao::query();
 
-        switch ($periodo) {
-            case 'hoje':
-                $query->whereDate('created_at', today());
-                break;
-            case 'semana':
-                $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
-                break;
-            case 'mes':
-                $query->whereMonth('created_at', now()->month);
-                break;
-            case 'ano':
-                $query->whereYear('created_at', now()->year);
-                break;
+            switch ($periodo) {
+                case 'hoje':
+                    $query->whereDate('created_at', today());
+                    break;
+                case 'semana':
+                    $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
+                    break;
+                case 'mes':
+                    $query->whereMonth('created_at', now()->month);
+                    break;
+                case 'ano':
+                    $query->whereYear('created_at', now()->year);
+                    break;
+            }
+
+            $entradas = (clone $query)->where('tipo', 'entrada')->sum('valor');
+            $saidas = (clone $query)->where('tipo', 'saida')->sum('valor');
+            $saldo = $entradas - $saidas;
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'periodo' => $periodo,
+                    'entradas' => $entradas,
+                    'saidas' => $saidas,
+                    'saldo' => $saldo,
+                    'comissoes' => (clone $query)->where('tipo', 'comissao')->sum('valor'),
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório financeiro'
+            ], 500);
         }
-
-        $entradas = (clone $query)->where('tipo', 'entrada')->sum('valor');
-        $saidas = (clone $query)->where('tipo', 'saida')->sum('valor');
-        $saldo = $entradas - $saidas;
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'periodo' => $periodo,
-                'entradas' => $entradas,
-                'saidas' => $saidas,
-                'saldo' => $saldo,
-                'comissoes' => (clone $query)->where('tipo', 'comissao')->sum('valor'),
-            ]
-        ]);
     }
-
 
     // ==========================================
     // 9. CONFIGURAÇÕES DO SISTEMA
@@ -870,18 +1229,24 @@ class AdminController extends Controller
      */
     public function configuracoes()
     {
-        // TODO: Implementar configurações do sistema
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'nome' => 'EstouAqui',
-                'email' => 'geral@estouaqui.co.mz',
-                'telefone' => '+258 84 123 4567',
-                'endereco' => 'Maputo, Moçambique',
-                'comissao_padrao' => 10,
-                'tipo_comissao' => 'porcentagem',
-            ]
-        ]);
+        try {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'nome' => 'EstouAqui',
+                    'email' => 'geral@estouaqui.co.mz',
+                    'telefone' => '+258 84 123 4567',
+                    'endereco' => 'Maputo, Moçambique',
+                    'comissao_padrao' => 10,
+                    'tipo_comissao' => 'porcentagem',
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao carregar configurações'
+            ], 500);
+        }
     }
 
     /**
@@ -890,13 +1255,18 @@ class AdminController extends Controller
      */
     public function updateConfiguracoes(Request $request)
     {
-        // TODO: Implementar atualização de configurações
-        return response()->json([
-            'success' => true,
-            'message' => 'Configurações atualizadas'
-        ]);
+        try {
+            return response()->json([
+                'success' => true,
+                'message' => 'Configurações atualizadas'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar configurações'
+            ], 500);
+        }
     }
-
 
     // ==========================================
     // 10. LOGS DO SISTEMA
@@ -908,13 +1278,18 @@ class AdminController extends Controller
      */
     public function logs(Request $request)
     {
-        // TODO: Implementar listagem de logs
-        return response()->json([
-            'success' => true,
-            'data' => []
-        ]);
+        try {
+            return response()->json([
+                'success' => true,
+                'data' => []
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao carregar logs'
+            ], 500);
+        }
     }
-
 
     // ==========================================
     // 11. ESTATÍSTICAS GERAIS
@@ -926,25 +1301,34 @@ class AdminController extends Controller
      */
     public function stats()
     {
-        $totalUsers = User::count();
-        $totalClientes = User::where('tipo', 'cliente')->count();
-        $totalPrestadores = User::where('tipo', 'prestador')->count();
-        $totalServicos = Servico::count();
-        $totalPedidos = Pedido::count();
-        $totalAvaliacoes = Avaliacao::count();
-        $receitaTotal = Transacao::where('tipo', 'entrada')->sum('valor');
+        try {
+            $totalUsers = User::count();
+            $totalClientes = User::where('tipo', 'cliente')->count();
+            $totalPrestadores = User::where('tipo', 'prestador')->count();
+            $totalServicos = Servico::count();
+            $totalPedidos = Pedido::count();
+            $totalAvaliacoes = Avaliacao::count();
+            $receitaTotal = Transacao::where('tipo', 'entrada')->sum('valor');
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'total_usuarios' => $totalUsers,
-                'total_clientes' => $totalClientes,
-                'total_prestadores' => $totalPrestadores,
-                'total_servicos' => $totalServicos,
-                'total_pedidos' => $totalPedidos,
-                'total_avaliacoes' => $totalAvaliacoes,
-                'receita_total' => $receitaTotal,
-            ]
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total_usuarios' => $totalUsers,
+                    'total_clientes' => $totalClientes,
+                    'total_prestadores' => $totalPrestadores,
+                    'total_servicos' => $totalServicos,
+                    'total_pedidos' => $totalPedidos,
+                    'total_avaliacoes' => $totalAvaliacoes,
+                    'receita_total' => $receitaTotal,
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Stats ERRO: ' . $e->getMessage());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
     }
 }

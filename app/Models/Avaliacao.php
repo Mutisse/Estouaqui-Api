@@ -9,6 +9,9 @@ class Avaliacao extends Model
 {
     use HasFactory;
 
+    // ✅ ADICIONE ESTA LINHA - FORÇA O NOME CORRETO DA TABELA
+    protected $table = 'avaliacoes';
+
     protected $fillable = [
         'cliente_id',
         'prestador_id',

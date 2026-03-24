@@ -128,7 +128,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     // 2.3 FUNCIONALIDADES DO CLIENTE
     // ==========================================
-    Route::prefix('cliente')->name('cliente.')->group(function () {
+    Route::middleware('role:cliente')->prefix('cliente')->name('cliente.')->group(function () {
 
         // Pedidos
         Route::prefix('pedidos')->name('pedidos.')->group(function () {
@@ -161,7 +161,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     // 2.4 FUNCIONALIDADES DO PRESTADOR
     // ==========================================
-    Route::prefix('prestador')->name('prestador.')->group(function () {
+    Route::middleware('role:prestador')->prefix('prestador')->name('prestador.')->group(function () {
 
         // Serviços
         Route::prefix('servicos')->name('servicos.')->group(function () {
@@ -200,7 +200,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     // 2.5 ADMINISTRAÇÃO (apenas para administradores)
     // ==========================================
-    Route::middleware('can:admin')->prefix('admin')->name('admin.')->group(function () {
+    Route::middleware('role:admin')->prefix('admin')->name('admin.')->group(function () {
 
         // Dashboard
         Route::get('/dashboard', [AdminController::class, 'dashboard'])->name('dashboard');
