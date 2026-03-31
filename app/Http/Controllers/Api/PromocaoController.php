@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Validator;
 
 class PromocaoController extends Controller
 {
+
     /**
      * Listar todas as promoções
      * GET /api/promocoes
@@ -18,7 +19,8 @@ class PromocaoController extends Controller
         try {
             $promocoes = Promocao::orderBy('created_at', 'desc')
                 ->limit(50)
-                ->get();
+                ->get()
+                ->toArray(); // ← CONVERTER PARA ARRAY
 
             return response()->json([
                 'success' => true,
@@ -26,37 +28,11 @@ class PromocaoController extends Controller
             ]);
         } catch (\Exception $e) {
             return response()->json([
-                'success' => true,
-                'data' => []
-            ]);
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
         }
     }
-
-    /**
-     * Listar promoções ativas
-     * GET /api/promocoes/ativas
-     */
-    public function ativas()
-    {
-        try {
-            $promocoes = Promocao::where('ativo', 1)
-                ->whereDate('validade', '>=', date('Y-m-d'))
-                ->orderBy('created_at', 'desc')
-                ->limit(10)
-                ->get();
-
-            return response()->json([
-                'success' => true,
-                'data' => $promocoes
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => true,
-                'data' => []
-            ]);
-        }
-    }
-
     /**
      * Detalhes de uma promoção
      * GET /api/promocoes/{id}

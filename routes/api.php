@@ -23,7 +23,24 @@ use App\Http\Controllers\Api\RaioOpcaoController;
 |--------------------------------------------------------------------------
 | API ROTAS - ESTOUAQUI
 |--------------------------------------------------------------------------
+| Estrutura organizada por responsabilidades:
+| - AuthController: autenticação
+| - UsuarioController: funcionalidades comuns
+| - ClienteController: específicas do cliente
+| - PrestadorController: específicas do prestador
+| - AdminController: administração
+| - CategoriaController: gestão de categorias
+| - ServicoController: gestão de serviços
+| - PedidoController: gestão de pedidos
+| - AvaliacaoController: gestão de avaliações
+| - FavoritoController: gestão de favoritos
+| - TransacaoController: gestão financeira
 */
+
+// ==========================================
+// ✅ ROTA DE LOGIN GLOBAL (OBRIGATÓRIA)
+// ==========================================
+Route::post('/login', [AuthController::class, 'login'])->name('login');
 
 // ==========================================
 // 1. ROTAS PÚBLICAS (sem autenticação)
@@ -101,21 +118,15 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     // 2.2 FUNCIONALIDADES COMUNS (UsuarioController)
     // ==========================================
-
-    // Perfil
     Route::get('/me', [UsuarioController::class, 'me'])->name('me');
     Route::put('/me', [UsuarioController::class, 'update'])->name('update');
     Route::delete('/me', [UsuarioController::class, 'destroy'])->name('destroy');
-
-    // Avatar
     Route::post('/avatar', [UsuarioController::class, 'updateAvatar'])->name('avatar.update');
     Route::delete('/avatar', [UsuarioController::class, 'removeAvatar'])->name('avatar.remove');
-
-    // Senha
     Route::put('/password', [UsuarioController::class, 'changePassword'])->name('password.change');
-
-    // Dashboard
     Route::get('/dashboard', [UsuarioController::class, 'dashboard'])->name('dashboard');
+    Route::get('/activities/recent', [UsuarioController::class, 'recentActivities'])->name('activities.recent');
+    Route::get('/activities', [UsuarioController::class, 'activitiesHistory'])->name('activities.history');
 
     // Notificações
     Route::prefix('notifications')->name('notifications.')->group(function () {
@@ -124,7 +135,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{id}/read', [UsuarioController::class, 'markNotificationRead'])->name('read');
     });
 
-    // Rotas de localização
+    // Localização
     Route::prefix('localizacao')->name('localizacao.')->group(function () {
         Route::get('/', [LocalizacaoController::class, 'show']);
         Route::post('/', [LocalizacaoController::class, 'update']);
@@ -137,22 +148,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/', [UsuarioController::class, 'updatePreferences'])->name('update');
     });
 
-    // ==========================================
-    // ROTAS PARA TIPOS DE SERVIÇO
-    // ==========================================
-    Route::prefix('servico-tipos')->name('servico-tipos.')->group(function () {
-        Route::get('/', [ServicoTipoController::class, 'index']);
-        Route::get('/options', [ServicoTipoController::class, 'options']);
-    });
-
-    // ==========================================
-    // ROTAS PARA OPÇÕES DE RAIO
-    // ==========================================
-    Route::prefix('raio-opcoes')->name('raio-opcoes.')->group(function () {
-        Route::get('/', [RaioOpcaoController::class, 'index']);
-        Route::get('/options', [RaioOpcaoController::class, 'options']);
-    });
-
     // Endereços
     Route::prefix('addresses')->name('addresses.')->group(function () {
         Route::get('/', [UsuarioController::class, 'addresses'])->name('index');
@@ -163,16 +158,22 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/{id}/primary', [UsuarioController::class, 'setPrimaryAddress'])->name('primary');
     });
 
-    // NOVAS ROTAS DE ATIVIDADE
-    Route::get('/activities/recent', [UsuarioController::class, 'recentActivities'])->name('activities.recent');
-    Route::get('/activities', [UsuarioController::class, 'activitiesHistory'])->name('activities.history');
+    // Tipos de serviço
+    Route::prefix('servico-tipos')->name('servico-tipos.')->group(function () {
+        Route::get('/', [ServicoTipoController::class, 'index']);
+        Route::get('/options', [ServicoTipoController::class, 'options']);
+    });
+
+    // Opções de raio
+    Route::prefix('raio-opcoes')->name('raio-opcoes.')->group(function () {
+        Route::get('/', [RaioOpcaoController::class, 'index']);
+        Route::get('/options', [RaioOpcaoController::class, 'options']);
+    });
 
     // ==========================================
     // 2.3 FUNCIONALIDADES DO CLIENTE
     // ==========================================
     Route::middleware('role:cliente')->prefix('cliente')->name('cliente.')->group(function () {
-
-        // Pedidos
         Route::prefix('pedidos')->name('pedidos.')->group(function () {
             Route::get('/', [ClienteController::class, 'pedidos'])->name('index');
             Route::get('/{id}', [ClienteController::class, 'showPedido'])->name('show');
@@ -180,7 +181,6 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{id}/cancelar', [ClienteController::class, 'cancelarPedido'])->name('cancelar');
         });
 
-        // Avaliações
         Route::prefix('avaliacoes')->name('avaliacoes.')->group(function () {
             Route::get('/', [ClienteController::class, 'avaliacoes'])->name('index');
             Route::post('/', [ClienteController::class, 'createAvaliacao'])->name('create');
@@ -188,10 +188,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{id}', [ClienteController::class, 'deleteAvaliacao'])->name('delete');
         });
 
-        // Verificar avaliação de pedido
         Route::get('/pedidos/{pedidoId}/avaliacao', [ClienteController::class, 'checkAvaliacao'])->name('check-avaliacao');
 
-        // Favoritos
         Route::prefix('favoritos')->name('favoritos.')->group(function () {
             Route::get('/', [FavoritoController::class, 'index'])->name('index');
             Route::post('/{prestadorId}', [FavoritoController::class, 'store'])->name('add');
@@ -204,8 +202,6 @@ Route::middleware('auth:sanctum')->group(function () {
     // 2.4 FUNCIONALIDADES DO PRESTADOR
     // ==========================================
     Route::middleware('role:prestador')->prefix('prestador')->name('prestador.')->group(function () {
-
-        // Serviços
         Route::prefix('servicos')->name('servicos.')->group(function () {
             Route::get('/', [PrestadorController::class, 'servicos'])->name('index');
             Route::post('/', [PrestadorController::class, 'createServico'])->name('create');
@@ -214,38 +210,30 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{id}/toggle', [PrestadorController::class, 'toggleServico'])->name('toggle');
         });
 
-        // Agenda
         Route::prefix('agenda')->name('agenda.')->group(function () {
             Route::get('/', [PrestadorController::class, 'agenda'])->name('index');
             Route::post('/bloquear', [PrestadorController::class, 'bloquearHorario'])->name('bloquear');
             Route::delete('/{id}', [PrestadorController::class, 'desbloquearHorario'])->name('desbloquear');
         });
 
-        // Solicitações de serviço
         Route::prefix('solicitacoes')->name('solicitacoes.')->group(function () {
             Route::get('/', [PrestadorController::class, 'solicitacoes'])->name('index');
             Route::put('/{id}/aceitar', [PrestadorController::class, 'aceitarSolicitacao'])->name('aceitar');
             Route::put('/{id}/recusar', [PrestadorController::class, 'recusarSolicitacao'])->name('recusar');
         });
 
-        // Categorias do prestador
         Route::prefix('categorias')->name('categorias.')->group(function () {
             Route::get('/', [PrestadorController::class, 'minhasCategorias'])->name('index');
             Route::post('/{categoriaId}', [PrestadorController::class, 'addCategoria'])->name('add');
             Route::delete('/{categoriaId}', [PrestadorController::class, 'removeCategoria'])->name('remove');
         });
 
-        // Ganhos do prestador
-        Route::get('/ganhos', [PrestadorController::class, 'ganhos'])->name('ganhos');
-
-        // Saques
         Route::prefix('saques')->name('saques.')->group(function () {
             Route::get('/', [PrestadorController::class, 'saques'])->name('index');
             Route::post('/', [PrestadorController::class, 'solicitarSaque'])->name('solicitar');
             Route::get('/historico', [PrestadorController::class, 'historicoSaques'])->name('historico');
         });
 
-        // Intervalos
         Route::prefix('intervalos')->name('intervalos.')->group(function () {
             Route::get('/', [PrestadorController::class, 'intervalos'])->name('index');
             Route::post('/', [PrestadorController::class, 'criarIntervalo'])->name('create');
@@ -253,17 +241,12 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{id}', [PrestadorController::class, 'deletarIntervalo'])->name('delete');
         });
 
-        // Disponibilidade
+        Route::get('/ganhos', [PrestadorController::class, 'ganhos'])->name('ganhos');
         Route::get('/disponibilidade', [PrestadorController::class, 'getDisponibilidade']);
         Route::put('/disponibilidade', [PrestadorController::class, 'updateDisponibilidade']);
-
-        // Próximos serviços e avaliações recentes
         Route::get('/proximos-servicos', [PrestadorController::class, 'proximosServicos']);
         Route::get('/avaliacoes/recentes', [PrestadorController::class, 'avaliacoesRecentes']);
-
-        // Estatísticas do prestador
         Route::get('/stats', [PrestadorController::class, 'stats'])->name('stats');
-
         Route::post('/clear-cache', [PrestadorController::class, 'clearCache']);
     });
 
@@ -271,10 +254,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // 2.5 ADMINISTRAÇÃO (apenas para administradores)
     // ==========================================
     Route::middleware('role:admin')->prefix('admin')->name('admin.')->group(function () {
-
-        // Dashboard
         Route::get('/dashboard', [AdminController::class, 'dashboard'])->name('dashboard');
         Route::get('/atividade', [AdminController::class, 'atividade'])->name('atividade');
+        Route::get('/stats', [AdminController::class, 'stats'])->name('stats');
+        Route::get('/logs', [AdminController::class, 'logs'])->name('logs');
+        Route::get('/configuracoes', [AdminController::class, 'configuracoes'])->name('configuracoes');
+        Route::put('/configuracoes', [AdminController::class, 'updateConfiguracoes'])->name('configuracoes.update');
 
         // Gestão de usuários
         Route::prefix('users')->name('users.')->group(function () {
@@ -353,33 +338,27 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/financeiro', [AdminController::class, 'relatorioFinanceiro'])->name('financeiro');
             Route::get('/prestadores', [AdminController::class, 'relatorioPrestadores'])->name('prestadores');
         });
-
-        // Configurações
-        Route::get('/configuracoes', [AdminController::class, 'configuracoes'])->name('configuracoes');
-        Route::put('/configuracoes', [AdminController::class, 'updateConfiguracoes'])->name('configuracoes.update');
-
-        // Logs
-        Route::get('/logs', [AdminController::class, 'logs'])->name('logs');
-
-        // Stats
-        Route::get('/stats', [AdminController::class, 'stats'])->name('stats');
     });
 
-    // Rotas de chat
-    Route::prefix('chat')->group(function () {
-        Route::get('messages/{prestadorId}', [ChatController::class, 'getMessages']);
-        Route::post('messages', [ChatController::class, 'sendMessage']);
-        Route::get('messages/{prestadorId}/latest', [ChatController::class, 'getLatestMessages']);
-        Route::put('messages/{prestadorId}/read', [ChatController::class, 'markAsRead']);
-        Route::get('conversations', [ChatController::class, 'getConversations']);
-        Route::get('unread-count', [ChatController::class, 'getUnreadCount']);
+    // ==========================================
+    // 2.6 CHAT (protegido)
+    // ==========================================
+    Route::prefix('chat')->name('chat.')->group(function () {
+        Route::get('/messages/{prestadorId}', [ChatController::class, 'getMessages'])->name('messages');
+        Route::post('/messages', [ChatController::class, 'sendMessage'])->name('send');
+        Route::get('/messages/{prestadorId}/latest', [ChatController::class, 'getLatestMessages'])->name('latest');
+        Route::put('/messages/{prestadorId}/read', [ChatController::class, 'markAsRead'])->name('read');
+        Route::get('/conversations', [ChatController::class, 'getConversations'])->name('conversations');
+        Route::get('/unread-count', [ChatController::class, 'getUnreadCount'])->name('unread-count');
     });
 
-    // ROTAS ADMIN DE PROMOÇÕES (protegidas)
-    Route::middleware(['role:admin'])->prefix('admin/promocoes')->group(function () {
-        Route::post('/', [PromocaoController::class, 'store']);
-        Route::put('/{id}', [PromocaoController::class, 'update']);
-        Route::delete('/{id}', [PromocaoController::class, 'destroy']);
+    // ==========================================
+    // 2.7 ADMIN DE PROMOÇÕES (protegido - apenas admin)
+    // ==========================================
+    Route::middleware('role:admin')->prefix('admin/promocoes')->name('admin.promocoes.')->group(function () {
+        Route::post('/', [PromocaoController::class, 'store'])->name('store');
+        Route::put('/{id}', [PromocaoController::class, 'update'])->name('update');
+        Route::delete('/{id}', [PromocaoController::class, 'destroy'])->name('destroy');
     });
 });
 
