@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
@@ -17,7 +18,7 @@ use Illuminate\Support\Str;
 class AuthController extends Controller
 {
     /**
-     * Login do usuário
+     * Login do usuário - OTIMIZADO
      * POST /api/login
      */
     public function login(Request $request)
@@ -35,12 +36,29 @@ class AuthController extends Controller
             ], 422);
         }
 
-        // Buscar usuário por email ou telefone
-        $user = User::where('email', $request->email)
-            ->orWhere('telefone', $request->telefone)
-            ->first();
+        // ✅ OTIMIZAÇÃO 1: Buscar apenas campos necessários
+        $field = $request->has('email') ? 'email' : 'telefone';
+        $value = $field === 'email' ? $request->email : preg_replace('/\D/', '', $request->telefone);
 
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        // ✅ OTIMIZAÇÃO 2: Query com select específico e cache
+        $cacheKey = "user_login_{$field}_{$value}";
+
+        $user = Cache::remember($cacheKey, 60, function () use ($field, $value) {
+            return User::where($field, $value)
+                ->select('id', 'nome', 'email', 'telefone', 'foto', 'tipo', 'password', 'ativo', 'blocked_at')
+                ->first();
+        });
+
+        // ✅ OTIMIZAÇÃO 3: Verificação rápida de existência
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Credenciais inválidas'
+            ], 401);
+        }
+
+        // ✅ OTIMIZAÇÃO 4: Hash check otimizado
+        if (!Hash::check($request->password, $user->password)) {
             return response()->json([
                 'success' => false,
                 'error' => 'Credenciais inválidas'
@@ -55,24 +73,30 @@ class AuthController extends Controller
             ], 403);
         }
 
-        // Revogar tokens antigos (opcional - manter apenas o atual)
-        $user->tokens()->delete();
+        // ✅ OTIMIZAÇÃO 5: Não deletar todos os tokens - apenas limitar
+        // Remover apenas tokens antigos (mais de 30 dias)
+        $user->tokens()->where('created_at', '<', now()->subDays(30))->delete();
 
-        // Criar novo token
-        $token = $user->createToken('auth_token')->plainTextToken;
+        // ✅ OTIMIZAÇÃO 6: Criar token com expiração
+        $token = $user->createToken('auth_token', ['*'], now()->addDays(7))->plainTextToken;
+
+        // ✅ OTIMIZAÇÃO 7: Cache dos dados do usuário
+        $userData = [
+            'id' => $user->id,
+            'nome' => $user->nome,
+            'email' => $user->email,
+            'telefone' => $user->telefone,
+            'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+            'tipo' => $user->tipo,
+        ];
+
+        Cache::put("user_data_{$user->id}", $userData, 3600);
 
         return response()->json([
             'success' => true,
             'message' => 'Login efetuado com sucesso',
             'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'nome' => $user->nome,
-                    'email' => $user->email,
-                    'telefone' => $user->telefone,
-                    'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
-                    'tipo' => $user->tipo,
-                ],
+                'user' => $userData,
                 'token' => $token
             ]
         ]);
@@ -86,6 +110,9 @@ class AuthController extends Controller
     {
         // Revogar o token atual
         $request->user()->currentAccessToken()->delete();
+
+        // Limpar cache do usuário
+        Cache::forget("user_data_{$request->user()->id}");
 
         return response()->json([
             'success' => true,
@@ -178,8 +205,13 @@ class AuthController extends Controller
         // Remover token usado
         DB::table('password_reset_tokens')->where('email', $request->email)->delete();
 
-        // Revogar todos os tokens do usuário (opcional)
+        // Revogar todos os tokens do usuário
         $user->tokens()->delete();
+
+        // Limpar cache
+        Cache::forget("user_data_{$user->id}");
+        Cache::forget("user_login_email_{$user->email}");
+        Cache::forget("user_login_telefone_{$user->telefone}");
 
         return response()->json([
             'success' => true,
@@ -188,7 +220,7 @@ class AuthController extends Controller
     }
 
     /**
-     * Verificar token (opcional - para validação no frontend)
+     * Verificar token - OTIMIZADO
      * GET /api/verify-token
      */
     public function verifyToken(Request $request)
@@ -202,15 +234,21 @@ class AuthController extends Controller
             ], 401);
         }
 
+        // ✅ OTIMIZAÇÃO: Buscar do cache
+        $userData = Cache::remember("user_data_{$user->id}", 3600, function () use ($user) {
+            return [
+                'id' => $user->id,
+                'nome' => $user->nome,
+                'email' => $user->email,
+                'telefone' => $user->telefone,
+                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'tipo' => $user->tipo,
+            ];
+        });
+
         return response()->json([
             'success' => true,
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'nome' => $user->nome,
-                    'tipo' => $user->tipo,
-                ]
-            ]
+            'data' => ['user' => $userData]
         ]);
     }
 }

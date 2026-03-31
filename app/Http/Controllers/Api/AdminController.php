@@ -1139,37 +1139,7 @@ class AdminController extends Controller
      * Relatório de prestadores
      * GET /api/admin/relatorios/prestadores
      */
-    public function relatorioPrestadores()
-    {
-        try {
-            $total = User::where('tipo', 'prestador')->count();
-            $verificados = User::where('tipo', 'prestador')->where('verificado', true)->count();
-            $naoVerificados = $total - $verificados;
 
-            $mediaAvaliacao = Avaliacao::whereHas('prestador')->avg('nota') ?? 0;
-
-            $topPrestadores = User::where('tipo', 'prestador')
-                ->orderBy('media_avaliacao', 'desc')
-                ->limit(10)
-                ->get(['id', 'nome', 'media_avaliacao', 'total_avaliacoes']);
-
-            return response()->json([
-                'success' => true,
-                'data' => [
-                    'total' => $total,
-                    'verificados' => $verificados,
-                    'nao_verificados' => $naoVerificados,
-                    'media_avaliacao_geral' => round($mediaAvaliacao, 1),
-                    'top_prestadores' => $topPrestadores,
-                ]
-            ]);
-        } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao gerar relatório de prestadores'
-            ], 500);
-        }
-    }
 
     /**
      * Relatório financeiro
@@ -1331,4 +1301,81 @@ class AdminController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Relatório de prestadores
+     * GET /api/admin/relatorios/prestadores
+     */
+    public function relatorioPrestadores(Request $request)
+    {
+        try {
+            Log::info('RelatórioPrestadores: iniciando');
+
+            // Total de prestadores
+            $total = User::where('tipo', 'prestador')->count();
+
+            // Prestadores verificados
+            $verificados = User::where('tipo', 'prestador')
+                ->where('verificado', true)
+                ->count();
+
+            // Prestadores não verificados
+            $naoVerificados = $total - $verificados;
+
+            // Média de avaliação geral dos prestadores
+            $mediaAvaliacao = Avaliacao::whereHas('prestador')->avg('nota') ?? 0;
+
+            // Top 10 prestadores melhor avaliados
+            $topPrestadores = User::where('tipo', 'prestador')
+                ->orderBy('media_avaliacao', 'desc')
+                ->orderBy('total_avaliacoes', 'desc')
+                ->limit(10)
+                ->get(['id', 'nome', 'email', 'media_avaliacao', 'total_avaliacoes', 'verificado']);
+
+            // Prestadores ativos
+            $ativos = User::where('tipo', 'prestador')
+                ->where('ativo', true)
+                ->count();
+
+            // Prestadores bloqueados
+            $bloqueados = User::where('tipo', 'prestador')
+                ->whereNotNull('blocked_at')
+                ->count();
+
+            // Prestadores com mais serviços realizados
+            $topServicos = User::where('tipo', 'prestador')
+                ->withCount('pedidosPrestador')
+                ->orderBy('pedidos_prestador_count', 'desc')
+                ->limit(10)
+                ->get(['id', 'nome', 'email', 'pedidos_prestador_count']);
+
+            Log::info('RelatórioPrestadores: finalizado com sucesso');
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'total' => $total,
+                    'verificados' => $verificados,
+                    'nao_verificados' => $naoVerificados,
+                    'ativos' => $ativos,
+                    'bloqueados' => $bloqueados,
+                    'media_avaliacao_geral' => round($mediaAvaliacao, 1),
+                    'top_prestadores' => $topPrestadores,
+                    'top_servicos' => $topServicos,
+                    'periodo' => $request->get('periodo', 'geral')
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('RelatórioPrestadores ERRO: ' . $e->getMessage());
+            Log::error('RelatórioPrestadores ERRO linha: ' . $e->getLine());
+
+            return response()->json([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+
+    
 }

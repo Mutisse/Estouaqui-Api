@@ -12,7 +12,12 @@ use App\Http\Controllers\Api\PedidoController;
 use App\Http\Controllers\Api\AvaliacaoController;
 use App\Http\Controllers\Api\FavoritoController;
 use App\Http\Controllers\Api\TransacaoController;
-
+use App\Http\Controllers\Api\ChatController;
+use App\Http\Controllers\Api\PromocaoController;
+use App\Http\Controllers\Api\AuxiliarController;
+use App\Http\Controllers\Api\LocalizacaoController;
+use App\Http\Controllers\Api\ServicoTipoController;
+use App\Http\Controllers\Api\RaioOpcaoController;
 /*
 |--------------------------------------------------------------------------
 | API ROTAS - ESTOUAQUI
@@ -68,7 +73,16 @@ Route::prefix('prestadores')->name('prestadores.')->group(function () {
 
 // 1.6 Estatísticas públicas
 Route::get('/stats', [UsuarioController::class, 'publicStats'])->name('public-stats');
-
+// ==========================================
+// ROTAS AUXILIARES (dados de configuração)
+// ==========================================
+Route::prefix('auxiliar')->name('auxiliar.')->group(function () {
+    Route::get('/dias-semana', [AuxiliarController::class, 'diasSemana']);
+    Route::get('/meses', [AuxiliarController::class, 'meses']);
+    Route::get('/dias-options', [AuxiliarController::class, 'diasOptions']);
+    Route::get('/horarios-padrao', [AuxiliarController::class, 'horariosPadrao']); // NOVA
+    Route::get('/horarios-options', [AuxiliarController::class, 'horariosOptions']); // NOVA
+});
 
 // ==========================================
 // 2. ROTAS PROTEGIDAS (requerem autenticação)
@@ -108,13 +122,32 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::put('/read-all', [UsuarioController::class, 'markAllNotificationsRead'])->name('read-all');
         Route::put('/{id}/read', [UsuarioController::class, 'markNotificationRead'])->name('read');
     });
-
+    // Rotas de localização
+    Route::prefix('localizacao')->name('localizacao.')->group(function () {
+        Route::get('/', [LocalizacaoController::class, 'show']);
+        Route::post('/', [LocalizacaoController::class, 'update']);
+        Route::get('/prestadores-proximos', [LocalizacaoController::class, 'prestadoresProximos']);
+    });
     // Preferências
     Route::prefix('preferences')->name('preferences.')->group(function () {
         Route::get('/', [UsuarioController::class, 'preferences'])->name('show');
         Route::put('/', [UsuarioController::class, 'updatePreferences'])->name('update');
     });
+    // ==========================================
+    // ROTAS PARA TIPOS DE SERVIÇO
+    // ==========================================
+    Route::prefix('servico-tipos')->name('servico-tipos.')->group(function () {
+        Route::get('/', [ServicoTipoController::class, 'index']);
+        Route::get('/options', [ServicoTipoController::class, 'options']);
+    });
 
+    // ==========================================
+    // ROTAS PARA OPÇÕES DE RAIO
+    // ==========================================
+    Route::prefix('raio-opcoes')->name('raio-opcoes.')->group(function () {
+        Route::get('/', [RaioOpcaoController::class, 'index']);
+        Route::get('/options', [RaioOpcaoController::class, 'options']);
+    });
     // Endereços
     Route::prefix('addresses')->name('addresses.')->group(function () {
         Route::get('/', [UsuarioController::class, 'addresses'])->name('index');
@@ -124,6 +157,9 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/{id}', [UsuarioController::class, 'deleteAddress'])->name('delete');
         Route::put('/{id}/primary', [UsuarioController::class, 'setPrimaryAddress'])->name('primary');
     });
+    // ✅ NOVAS ROTAS DE ATIVIDADE
+    Route::get('/activities/recent', [UsuarioController::class, 'recentActivities'])->name('activities.recent');
+    Route::get('/activities', [UsuarioController::class, 'activitiesHistory'])->name('activities.history');
 
     // ==========================================
     // 2.3 FUNCIONALIDADES DO CLIENTE
@@ -192,9 +228,32 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/{categoriaId}', [PrestadorController::class, 'addCategoria'])->name('add');
             Route::delete('/{categoriaId}', [PrestadorController::class, 'removeCategoria'])->name('remove');
         });
+        // Ganhos do prestador
+        Route::get('/ganhos', [PrestadorController::class, 'ganhos'])->name('ganhos');
 
+        // Saques
+        Route::prefix('saques')->name('saques.')->group(function () {
+            Route::get('/', [PrestadorController::class, 'saques'])->name('index');
+            Route::post('/', [PrestadorController::class, 'solicitarSaque'])->name('solicitar');
+            Route::get('/historico', [PrestadorController::class, 'historicoSaques'])->name('historico');
+        });
+        // Intervalos
+        Route::prefix('intervalos')->name('intervalos.')->group(function () {
+            Route::get('/', [PrestadorController::class, 'intervalos'])->name('index');
+            Route::post('/', [PrestadorController::class, 'criarIntervalo'])->name('create');
+            Route::put('/{id}', [PrestadorController::class, 'atualizarIntervalo'])->name('update');
+            Route::delete('/{id}', [PrestadorController::class, 'deletarIntervalo'])->name('delete');
+        });
+        // Disponibilidade
+        Route::get('/disponibilidade', [PrestadorController::class, 'getDisponibilidade']);
+        Route::put('/disponibilidade', [PrestadorController::class, 'updateDisponibilidade']);
+        // Próximos serviços e avaliações recentes
+        Route::get('/proximos-servicos', [PrestadorController::class, 'proximosServicos']);
+        Route::get('/avaliacoes/recentes', [PrestadorController::class, 'avaliacoesRecentes']);
         // Estatísticas do prestador
         Route::get('/stats', [PrestadorController::class, 'stats'])->name('stats');
+        // routes/api.php - Adicionar dentro do grupo do prestador
+        Route::post('/clear-cache', [PrestadorController::class, 'clearCache']);
     });
 
     // ==========================================
@@ -281,6 +340,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/usuarios', [AdminController::class, 'relatorioUsuarios'])->name('usuarios');
             Route::get('/servicos', [AdminController::class, 'relatorioServicos'])->name('servicos');
             Route::get('/financeiro', [AdminController::class, 'relatorioFinanceiro'])->name('financeiro');
+            // ✅ ADICIONAR ESTA LINHA
+            Route::get('/prestadores', [AdminController::class, 'relatorioPrestadores'])->name('prestadores');
         });
 
         // Configurações
@@ -289,6 +350,34 @@ Route::middleware('auth:sanctum')->group(function () {
 
         // Logs
         Route::get('/logs', [AdminController::class, 'logs'])->name('logs');
+        // Dentro do grupo admin
+        Route::get('/stats', [AdminController::class, 'stats'])->name('stats');
+    });
+
+    // Rotas de chat
+    Route::prefix('chat')->middleware('auth:sanctum')->group(function () {
+        Route::get('messages/{prestadorId}', [ChatController::class, 'getMessages']);
+        Route::post('messages', [ChatController::class, 'sendMessage']);
+        Route::get('messages/{prestadorId}/latest', [ChatController::class, 'getLatestMessages']);
+        Route::put('messages/{prestadorId}/read', [ChatController::class, 'markAsRead']);
+        Route::get('conversations', [ChatController::class, 'getConversations']);
+        Route::get('unread-count', [ChatController::class, 'getUnreadCount']);
+    });
+
+    // Rotas públicas
+    Route::prefix('promocoes')->name('promocoes.')->group(function () {
+        Route::get('/', [PromocaoController::class, 'index']);
+        Route::get('/ativas', [PromocaoController::class, 'ativas']);
+        Route::get('/{id}', [PromocaoController::class, 'show']);
+        Route::get('/codigo/{codigo}', [PromocaoController::class, 'showByCodigo']);
+        Route::post('/validar', [PromocaoController::class, 'validarCupom']);
+    });
+
+    // Rotas protegidas (admin)
+    Route::middleware(['auth:sanctum', 'role:admin'])->prefix('admin/promocoes')->group(function () {
+        Route::post('/', [PromocaoController::class, 'store']);
+        Route::put('/{id}', [PromocaoController::class, 'update']);
+        Route::delete('/{id}', [PromocaoController::class, 'destroy']);
     });
 });
 

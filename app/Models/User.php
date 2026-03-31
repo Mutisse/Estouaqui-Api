@@ -28,6 +28,11 @@ class User extends Authenticatable
         'total_avaliacoes',
         'blocked_at',
         'preferences',
+        // ✅ PROPRIEDADES DE LOCALIZAÇÃO
+        'raio',
+        'latitude',
+        'longitude',
+        'documento',
     ];
 
     protected $hidden = [
@@ -43,6 +48,10 @@ class User extends Authenticatable
         'blocked_at' => 'datetime',
         'preferences' => 'array',
         'media_avaliacao' => 'decimal:1',
+        // ✅ CASTS DE LOCALIZAÇÃO
+        'raio' => 'integer',
+        'latitude' => 'decimal:8',
+        'longitude' => 'decimal:8',
     ];
 
     // ==========================================
@@ -100,6 +109,14 @@ class User extends Authenticatable
     }
 
     /**
+     * Tipos de serviço que o prestador oferece
+     */
+    public function servicoTipos()
+    {
+        return $this->belongsToMany(ServicoTipo::class, 'prestador_servico_tipos', 'prestador_id', 'servico_tipo_id');
+    }
+
+    /**
      * Pedidos feitos pelo cliente
      */
     public function pedidosCliente()
@@ -148,8 +165,35 @@ class User extends Authenticatable
     }
 
     /**
-     * Notificações (já existe no trait Notifiable)
+     * Mensagens enviadas
      */
+    public function mensagensEnviadas()
+    {
+        return $this->hasMany(Mensagem::class, 'remetente_id');
+    }
+
+    /**
+     * Mensagens recebidas
+     */
+    public function mensagensRecebidas()
+    {
+        return $this->hasMany(Mensagem::class, 'destinatario_id');
+    }
+
+    /**
+     * Conversas (usuários com quem o usuário atual conversou)
+     */
+    public function conversas()
+    {
+        $conversasIds = $this->mensagensEnviadas()
+            ->select('destinatario_id')
+            ->union($this->mensagensRecebidas()->select('remetente_id'))
+            ->distinct()
+            ->pluck('destinatario_id', 'remetente_id')
+            ->toArray();
+
+        return User::whereIn('id', $conversasIds);
+    }
 
     // ==========================================
     // MÉTODOS AUXILIARES
@@ -189,5 +233,83 @@ class User extends Authenticatable
     {
         $this->blocked_at = null;
         $this->save();
+    }
+
+    // ==========================================
+    // MÉTODOS DE LOCALIZAÇÃO
+    // ==========================================
+
+    /**
+     * Definir localização
+     */
+    public function setLocationAttribute($value)
+    {
+        if (is_array($value) && isset($value['latitude'], $value['longitude'])) {
+            $this->attributes['latitude'] = $value['latitude'];
+            $this->attributes['longitude'] = $value['longitude'];
+        }
+    }
+
+    /**
+     * Calcular distância até um ponto (em km) usando a fórmula de Haversine
+     */
+    public function distanceTo($latitude, $longitude)
+    {
+        if ($this->latitude && $this->longitude) {
+            $lat1 = deg2rad($this->latitude);
+            $lon1 = deg2rad($this->longitude);
+            $lat2 = deg2rad($latitude);
+            $lon2 = deg2rad($longitude);
+
+            $delta = $lon2 - $lon1;
+            $cos = sin($lat1) * sin($lat2) + cos($lat1) * cos($lat2) * cos($delta);
+            $angle = acos($cos);
+
+            return $angle * 6371; // Raio da Terra em km
+        }
+
+        return null;
+    }
+
+    /**
+     * Escopo para prestadores próximos (usando a fórmula de Haversine)
+     */
+    public function scopeNearby($query, $latitude, $longitude, $radius = 10)
+    {
+        return $query->whereRaw(
+            "(
+                6371 * acos(
+                    cos(radians(?)) * cos(radians(latitude)) *
+                    cos(radians(longitude) - radians(?)) +
+                    sin(radians(?)) * sin(radians(latitude))
+                )
+            ) <= ?",
+            [$latitude, $longitude, $latitude, $radius]
+        );
+    }
+
+    /**
+     * Escopo para prestadores dentro do raio de atendimento
+     */
+    public function scopeWithinRadius($query, $latitude, $longitude)
+    {
+        return $query->whereRaw(
+            "(
+                6371 * acos(
+                    cos(radians(?)) * cos(radians(latitude)) *
+                    cos(radians(longitude) - radians(?)) +
+                    sin(radians(?)) * sin(radians(latitude))
+                )
+            ) <= COALESCE(raio, 10)",
+            [$latitude, $longitude, $latitude]
+        );
+    }
+
+    /**
+     * Escopo para usuários com localização definida
+     */
+    public function scopeHasLocation($query)
+    {
+        return $query->whereNotNull('latitude')->whereNotNull('longitude');
     }
 }

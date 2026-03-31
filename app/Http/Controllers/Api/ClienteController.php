@@ -10,6 +10,8 @@ use App\Models\Favorito;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class ClienteController extends Controller
 {
@@ -77,9 +79,8 @@ class ClienteController extends Controller
         }
     }
 
-
     // ==========================================
-    // 2. PEDIDOS DO CLIENTE
+    // 2. PEDIDOS DO CLIENTE (COM CACHE)
     // ==========================================
 
     /**
@@ -89,15 +90,22 @@ class ClienteController extends Controller
     public function pedidos(Request $request)
     {
         $user = $request->user();
-        $status = $request->query('status'); // ativo, concluido, cancelado
+        $status = $request->query('status');
+        $page = $request->query('page', 1);
 
-        $query = Pedido::where('cliente_id', $user->id);
+        $cacheKey = "cliente_pedidos_{$user->id}_{$status}_{$page}";
 
-        if ($status) {
-            $query->where('status', $status);
-        }
+        $pedidos = Cache::remember($cacheKey, 120, function() use ($user, $status) {
+            $query = Pedido::where('cliente_id', $user->id);
 
-        $pedidos = $query->with('prestador')->orderBy('created_at', 'desc')->paginate(20);
+            if ($status) {
+                $query->where('status', $status);
+            }
+
+            return $query->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
+                ->orderBy('created_at', 'desc')
+                ->paginate(20);
+        });
 
         return response()->json([
             'success' => true,
@@ -112,9 +120,13 @@ class ClienteController extends Controller
     public function showPedido(Request $request, $id)
     {
         $user = $request->user();
-        $pedido = Pedido::where('cliente_id', $user->id)
-            ->with(['prestador', 'servico', 'avaliacao'])
-            ->find($id);
+        $cacheKey = "cliente_pedido_{$user->id}_{$id}";
+
+        $pedido = Cache::remember($cacheKey, 300, function() use ($user, $id) {
+            return Pedido::where('cliente_id', $user->id)
+                ->with(['prestador:id,nome,foto,telefone,media_avaliacao', 'servico:id,nome,preco,duracao', 'avaliacao'])
+                ->find($id);
+        });
 
         if (!$pedido) {
             return response()->json([
@@ -130,7 +142,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Criar novo pedido
+     * Criar novo pedido (limpar cache)
      * POST /api/cliente/pedidos
      */
     public function createPedido(Request $request)
@@ -164,6 +176,9 @@ class ClienteController extends Controller
                 'numero' => 'PED-' . strtoupper(uniqid()),
             ]);
 
+            // Limpar cache do cliente
+            $this->clearClienteCache($user->id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Pedido criado com sucesso',
@@ -178,7 +193,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Cancelar pedido
+     * Cancelar pedido (limpar cache)
      * PUT /api/cliente/pedidos/{id}/cancelar
      */
     public function cancelarPedido(Request $request, $id)
@@ -203,6 +218,10 @@ class ClienteController extends Controller
         $pedido->status = 'cancelado';
         $pedido->save();
 
+        // Limpar cache
+        $this->clearClienteCache($user->id);
+        Cache::forget("cliente_pedido_{$user->id}_{$id}");
+
         return response()->json([
             'success' => true,
             'message' => 'Pedido cancelado com sucesso',
@@ -210,9 +229,8 @@ class ClienteController extends Controller
         ]);
     }
 
-
     // ==========================================
-    // 3. AVALIAÇÕES DO CLIENTE
+    // 3. AVALIAÇÕES DO CLIENTE (COM CACHE)
     // ==========================================
 
     /**
@@ -222,11 +240,15 @@ class ClienteController extends Controller
     public function avaliacoes(Request $request)
     {
         $user = $request->user();
+        $page = $request->query('page', 1);
+        $cacheKey = "cliente_avaliacoes_{$user->id}_{$page}";
 
-        $avaliacoes = Avaliacao::where('cliente_id', $user->id)
-            ->with('prestador')
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
+        $avaliacoes = Cache::remember($cacheKey, 300, function() use ($user) {
+            return Avaliacao::where('cliente_id', $user->id)
+                ->with('prestador:id,nome,foto,telefone')
+                ->orderBy('created_at', 'desc')
+                ->paginate(20);
+        });
 
         return response()->json([
             'success' => true,
@@ -235,7 +257,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Criar avaliação para um prestador
+     * Criar avaliação (limpar cache)
      * POST /api/cliente/avaliacoes
      */
     public function createAvaliacao(Request $request)
@@ -294,6 +316,10 @@ class ClienteController extends Controller
             // Atualizar média do prestador
             $this->atualizarMediaPrestador($request->prestador_id);
 
+            // Limpar cache
+            $this->clearClienteCache($user->id);
+            $this->clearPrestadorCache($request->prestador_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Avaliação enviada com sucesso!',
@@ -308,7 +334,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Atualizar avaliação
+     * Atualizar avaliação (limpar cache)
      * PUT /api/cliente/avaliacoes/{id}
      */
     public function updateAvaliacao(Request $request, $id)
@@ -346,6 +372,10 @@ class ClienteController extends Controller
             // Atualizar média do prestador
             $this->atualizarMediaPrestador($avaliacao->prestador_id);
 
+            // Limpar cache
+            $this->clearClienteCache($user->id);
+            $this->clearPrestadorCache($avaliacao->prestador_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Avaliação atualizada com sucesso',
@@ -360,7 +390,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Deletar avaliação
+     * Deletar avaliação (limpar cache)
      * DELETE /api/cliente/avaliacoes/{id}
      */
     public function deleteAvaliacao(Request $request, $id)
@@ -381,6 +411,10 @@ class ClienteController extends Controller
         // Atualizar média do prestador
         $this->atualizarMediaPrestador($prestadorId);
 
+        // Limpar cache
+        $this->clearClienteCache($user->id);
+        $this->clearPrestadorCache($prestadorId);
+
         return response()->json([
             'success' => true,
             'message' => 'Avaliação removida com sucesso'
@@ -394,16 +428,17 @@ class ClienteController extends Controller
     public function checkAvaliacao(Request $request, $pedidoId)
     {
         $user = $request->user();
+        $cacheKey = "cliente_pedido_avaliacao_{$user->id}_{$pedidoId}";
 
-        $existe = Avaliacao::where('pedido_id', $pedidoId)
-            ->where('cliente_id', $user->id)
-            ->exists();
+        $existe = Cache::remember($cacheKey, 3600, function() use ($user, $pedidoId) {
+            return Avaliacao::where('pedido_id', $pedidoId)
+                ->where('cliente_id', $user->id)
+                ->exists();
+        });
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'avaliado' => $existe
-            ]
+            'data' => ['avaliado' => $existe]
         ]);
     }
 
@@ -412,18 +447,21 @@ class ClienteController extends Controller
      */
     private function atualizarMediaPrestador($prestadorId)
     {
-        $media = Avaliacao::where('prestador_id', $prestadorId)
-            ->avg('nota');
+        $media = Avaliacao::where('prestador_id', $prestadorId)->avg('nota');
+        $total = Avaliacao::where('prestador_id', $prestadorId)->count();
 
         User::where('id', $prestadorId)->update([
             'media_avaliacao' => round($media, 1),
-            'total_avaliacoes' => Avaliacao::where('prestador_id', $prestadorId)->count()
+            'total_avaliacoes' => $total
         ]);
+
+        // Limpar cache do prestador
+        Cache::forget("prestador_stats_{$prestadorId}");
+        Cache::forget("prestador_detalhes_{$prestadorId}");
     }
 
-
     // ==========================================
-    // 4. FAVORITOS
+    // 4. FAVORITOS (COM CACHE)
     // ==========================================
 
     /**
@@ -433,11 +471,14 @@ class ClienteController extends Controller
     public function favoritos(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "cliente_favoritos_{$user->id}";
 
-        $favoritos = Favorito::where('cliente_id', $user->id)
-            ->with('prestador')
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $favoritos = Cache::remember($cacheKey, 300, function() use ($user) {
+            return Favorito::where('cliente_id', $user->id)
+                ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
+                ->orderBy('created_at', 'desc')
+                ->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -446,7 +487,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Adicionar prestador aos favoritos
+     * Adicionar prestador aos favoritos (limpar cache)
      * POST /api/cliente/favoritos/{prestadorId}
      */
     public function addFavorito(Request $request, $prestadorId)
@@ -480,6 +521,9 @@ class ClienteController extends Controller
                 'prestador_id' => $prestadorId,
             ]);
 
+            // Limpar cache
+            Cache::forget("cliente_favoritos_{$user->id}");
+
             return response()->json([
                 'success' => true,
                 'message' => 'Prestador adicionado aos favoritos',
@@ -494,7 +538,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Remover prestador dos favoritos
+     * Remover prestador dos favoritos (limpar cache)
      * DELETE /api/cliente/favoritos/{prestadorId}
      */
     public function removeFavorito(Request $request, $prestadorId)
@@ -514,6 +558,9 @@ class ClienteController extends Controller
 
         $favorito->delete();
 
+        // Limpar cache
+        Cache::forget("cliente_favoritos_{$user->id}");
+
         return response()->json([
             'success' => true,
             'message' => 'Prestador removido dos favoritos'
@@ -527,16 +574,52 @@ class ClienteController extends Controller
     public function checkFavorito(Request $request, $prestadorId)
     {
         $user = $request->user();
+        $cacheKey = "cliente_favorito_check_{$user->id}_{$prestadorId}";
 
-        $isFavorito = Favorito::where('cliente_id', $user->id)
-            ->where('prestador_id', $prestadorId)
-            ->exists();
+        $isFavorito = Cache::remember($cacheKey, 600, function() use ($user, $prestadorId) {
+            return Favorito::where('cliente_id', $user->id)
+                ->where('prestador_id', $prestadorId)
+                ->exists();
+        });
 
         return response()->json([
             'success' => true,
-            'data' => [
-                'is_favorito' => $isFavorito
-            ]
+            'data' => ['is_favorito' => $isFavorito]
         ]);
+    }
+
+    // ==========================================
+    // 5. MÉTODOS AUXILIARES PARA LIMPAR CACHE
+    // ==========================================
+
+    /**
+     * Limpar cache do cliente
+     */
+    private function clearClienteCache($userId)
+    {
+        // Limpar cache de pedidos (várias páginas)
+        $statuses = ['pendente', 'confirmado', 'concluido', 'cancelado', null];
+        foreach ($statuses as $status) {
+            for ($page = 1; $page <= 5; $page++) {
+                $statusKey = $status ?: 'all';
+                Cache::forget("cliente_pedidos_{$userId}_{$statusKey}_{$page}");
+            }
+        }
+
+        // Limpar outros caches
+        Cache::forget("cliente_avaliacoes_{$userId}_1");
+        Cache::forget("cliente_favoritos_{$userId}");
+
+        // Limpar cache de dashboard
+        Cache::forget("dashboard_{$userId}");
+    }
+
+    /**
+     * Limpar cache do prestador
+     */
+    private function clearPrestadorCache($prestadorId)
+    {
+        Cache::forget("prestador_stats_{$prestadorId}");
+        Cache::forget("prestador_detalhes_{$prestadorId}");
     }
 }
