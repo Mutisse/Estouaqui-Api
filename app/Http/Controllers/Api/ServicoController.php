@@ -6,30 +6,35 @@ use App\Http\Controllers\Controller;
 use App\Models\Servico;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
 
 class ServicoController extends Controller
 {
     /**
-     * Listar serviços (admin)
+     * Listar serviços (admin) - COM CACHE
      * GET /api/admin/servicos
      */
     public function index(Request $request)
     {
-        $query = Servico::with(['prestador', 'categoria']);
+        $cacheKey = 'admin_servicos_' . md5($request->fullUrl());
 
-        if ($request->has('categoria_id')) {
-            $query->where('categoria_id', $request->categoria_id);
-        }
+        $servicos = Cache::remember($cacheKey, 300, function () use ($request) {
+            $query = Servico::with(['prestador:id,nome,foto,telefone', 'categoria:id,nome,icone,cor']);
 
-        if ($request->has('prestador_id')) {
-            $query->where('prestador_id', $request->prestador_id);
-        }
+            if ($request->has('categoria_id')) {
+                $query->where('categoria_id', $request->categoria_id);
+            }
 
-        if ($request->has('ativo')) {
-            $query->where('ativo', $request->ativo);
-        }
+            if ($request->has('prestador_id')) {
+                $query->where('prestador_id', $request->prestador_id);
+            }
 
-        $servicos = $query->paginate(20);
+            if ($request->has('ativo')) {
+                $query->where('ativo', $request->ativo);
+            }
+
+            return $query->orderBy('created_at', 'desc')->paginate(20);
+        });
 
         return response()->json([
             'success' => true,
@@ -38,12 +43,18 @@ class ServicoController extends Controller
     }
 
     /**
-     * Mostrar um serviço
+     * Mostrar um serviço - COM CACHE
      * GET /api/servicos/{id}
      */
     public function show($id)
     {
-        $servico = Servico::with(['prestador', 'categoria', 'pedidos'])->find($id);
+        $cacheKey = "servico_detalhes_{$id}";
+
+        $servico = Cache::remember($cacheKey, 3600, function () use ($id) {
+            return Servico::with(['prestador:id,nome,foto,telefone,media_avaliacao', 'categoria:id,nome,icone,cor', 'pedidos' => function ($q) {
+                $q->latest()->limit(5);
+            }])->find($id);
+        });
 
         if (!$servico) {
             return response()->json([
@@ -59,7 +70,7 @@ class ServicoController extends Controller
     }
 
     /**
-     * Criar serviço (admin)
+     * Criar serviço (admin) - LIMPAR CACHE
      * POST /api/admin/servicos
      */
     public function store(Request $request)
@@ -93,6 +104,8 @@ class ServicoController extends Controller
                 'ativo' => true,
             ]);
 
+            $this->clearServicoCache($servico->id, $request->prestador_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Serviço criado com sucesso',
@@ -107,7 +120,7 @@ class ServicoController extends Controller
     }
 
     /**
-     * Atualizar serviço
+     * Atualizar serviço - LIMPAR CACHE
      * PUT /api/admin/servicos/{id}
      */
     public function update(Request $request, $id)
@@ -149,6 +162,8 @@ class ServicoController extends Controller
 
             $servico->save();
 
+            $this->clearServicoCache($id, $servico->prestador_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Serviço atualizado com sucesso',
@@ -163,7 +178,7 @@ class ServicoController extends Controller
     }
 
     /**
-     * Deletar serviço
+     * Deletar serviço - LIMPAR CACHE
      * DELETE /api/admin/servicos/{id}
      */
     public function destroy($id)
@@ -177,11 +192,28 @@ class ServicoController extends Controller
             ], 404);
         }
 
+        $prestadorId = $servico->prestador_id;
         $servico->delete();
+
+        $this->clearServicoCache($id, $prestadorId);
 
         return response()->json([
             'success' => true,
             'message' => 'Serviço removido com sucesso'
         ]);
+    }
+
+    /**
+     * Limpar cache do serviço
+     */
+    private function clearServicoCache($servicoId, $prestadorId)
+    {
+        Cache::forget("servico_detalhes_{$servicoId}");
+        Cache::forget("prestador_servicos_{$prestadorId}");
+
+        // Limpar cache de listagens (várias páginas)
+        for ($page = 1; $page <= 5; $page++) {
+            Cache::forget("admin_servicos_page_{$page}");
+        }
     }
 }

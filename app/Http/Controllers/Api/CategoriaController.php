@@ -6,23 +6,28 @@ use App\Http\Controllers\Controller;
 use App\Models\Categoria;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 class CategoriaController extends Controller
 {
     /**
-     * Listar todas as categorias
+     * Listar todas as categorias (admin) - COM CACHE
      * GET /api/admin/categorias
      */
     public function index(Request $request)
     {
-        $query = Categoria::query();
+        $cacheKey = 'admin_categorias_' . md5($request->fullUrl());
 
-        if ($request->has('ativo')) {
-            $query->where('ativo', $request->ativo);
-        }
+        $categorias = Cache::remember($cacheKey, 600, function() use ($request) {
+            $query = Categoria::query();
 
-        $categorias = $query->withCount('servicos')->get();
+            if ($request->has('ativo')) {
+                $query->where('ativo', $request->ativo);
+            }
+
+            return $query->withCount('servicos')->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -31,14 +36,16 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Listar categorias públicas (ativas)
+     * Listar categorias públicas (ativas) - COM CACHE
      * GET /api/prestadores/categorias
      */
     public function publicas()
     {
-        $categorias = Categoria::where('ativo', true)
-            ->withCount('servicos')
-            ->get();
+        $categorias = Cache::remember('categorias_publicas', 3600, function() {
+            return Categoria::where('ativo', true)
+                ->withCount('servicos')
+                ->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -47,7 +54,7 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Criar nova categoria
+     * Criar nova categoria - LIMPAR CACHE
      * POST /api/admin/categorias
      */
     public function store(Request $request)
@@ -76,6 +83,8 @@ class CategoriaController extends Controller
                 'ativo' => true,
             ]);
 
+            $this->clearCategoriaCache();
+
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria criada com sucesso',
@@ -90,12 +99,16 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Mostrar uma categoria
+     * Mostrar uma categoria - COM CACHE
      * GET /api/admin/categorias/{id}
      */
     public function show($id)
     {
-        $categoria = Categoria::with('servicos')->find($id);
+        $cacheKey = "categoria_{$id}";
+
+        $categoria = Cache::remember($cacheKey, 3600, function() use ($id) {
+            return Categoria::with('servicos')->find($id);
+        });
 
         if (!$categoria) {
             return response()->json([
@@ -111,7 +124,7 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Atualizar categoria
+     * Atualizar categoria - LIMPAR CACHE
      * PUT /api/admin/categorias/{id}
      */
     public function update(Request $request, $id)
@@ -152,6 +165,8 @@ class CategoriaController extends Controller
 
             $categoria->save();
 
+            $this->clearCategoriaCache();
+
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria atualizada com sucesso',
@@ -166,7 +181,7 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Deletar categoria
+     * Deletar categoria - LIMPAR CACHE
      * DELETE /api/admin/categorias/{id}
      */
     public function destroy($id)
@@ -182,9 +197,23 @@ class CategoriaController extends Controller
 
         $categoria->delete();
 
+        $this->clearCategoriaCache();
+
         return response()->json([
             'success' => true,
             'message' => 'Categoria removida com sucesso'
         ]);
+    }
+
+    /**
+     * Limpar cache de categorias
+     */
+    private function clearCategoriaCache()
+    {
+        Cache::forget('categorias_publicas');
+
+        for ($page = 1; $page <= 5; $page++) {
+            Cache::forget("admin_categorias_page_{$page}");
+        }
     }
 }

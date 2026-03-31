@@ -6,16 +6,19 @@ use App\Http\Controllers\Controller;
 use App\Models\Promocao;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
 
 class PromocaoController extends Controller
 {
     /**
-     * Listar todas as promoções
+     * Listar todas as promoções - COM CACHE
      * GET /api/promocoes
      */
     public function index()
     {
-        $promocoes = Promocao::orderBy('created_at', 'desc')->get();
+        $promocoes = Cache::remember('promocoes_all', 600, function() {
+            return Promocao::orderBy('created_at', 'desc')->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -24,14 +27,16 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Listar promoções ativas
+     * Listar promoções ativas - COM CACHE
      * GET /api/promocoes/ativas
      */
     public function ativas()
     {
-        $promocoes = Promocao::ativas()
-            ->orderBy('created_at', 'desc')
-            ->get();
+        $promocoes = Cache::remember('promocoes_ativas', 300, function() {
+            return Promocao::ativas()
+                ->orderBy('created_at', 'desc')
+                ->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -40,12 +45,16 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Detalhes de uma promoção
+     * Detalhes de uma promoção - COM CACHE
      * GET /api/promocoes/{id}
      */
     public function show($id)
     {
-        $promocao = Promocao::find($id);
+        $cacheKey = "promocao_{$id}";
+
+        $promocao = Cache::remember($cacheKey, 3600, function() use ($id) {
+            return Promocao::find($id);
+        });
 
         if (!$promocao) {
             return response()->json([
@@ -61,13 +70,16 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Buscar promoção por código
+     * Buscar promoção por código - COM CACHE
      * GET /api/promocoes/codigo/{codigo}
      */
     public function showByCodigo($codigo)
     {
-        $promocao = Promocao::where('codigo', strtoupper($codigo))
-            ->first();
+        $cacheKey = "promocao_codigo_" . strtoupper($codigo);
+
+        $promocao = Cache::remember($cacheKey, 300, function() use ($codigo) {
+            return Promocao::where('codigo', strtoupper($codigo))->first();
+        });
 
         if (!$promocao) {
             return response()->json([
@@ -83,7 +95,7 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Validar cupom
+     * Validar cupom - COM CACHE
      * POST /api/promocoes/validar
      */
     public function validarCupom(Request $request)
@@ -100,8 +112,11 @@ class PromocaoController extends Controller
             ], 422);
         }
 
-        $promocao = Promocao::where('codigo', strtoupper($request->codigo))
-            ->first();
+        $cacheKey = "promocao_validar_" . strtoupper($request->codigo);
+
+        $promocao = Cache::remember($cacheKey, 60, function() use ($request) {
+            return Promocao::where('codigo', strtoupper($request->codigo))->first();
+        });
 
         if (!$promocao) {
             return response()->json([
@@ -145,7 +160,7 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Criar nova promoção (admin)
+     * Criar nova promoção (admin) - LIMPAR CACHE
      * POST /api/promocoes
      */
     public function store(Request $request)
@@ -181,6 +196,8 @@ class PromocaoController extends Controller
             'imagem' => $request->imagem,
         ]);
 
+        $this->clearPromocaoCache();
+
         return response()->json([
             'success' => true,
             'message' => 'Promoção criada com sucesso',
@@ -189,7 +206,7 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Atualizar promoção (admin)
+     * Atualizar promoção (admin) - LIMPAR CACHE
      * PUT /api/promocoes/{id}
      */
     public function update(Request $request, $id)
@@ -234,6 +251,8 @@ class PromocaoController extends Controller
 
         $promocao->save();
 
+        $this->clearPromocaoCache();
+
         return response()->json([
             'success' => true,
             'message' => 'Promoção atualizada com sucesso',
@@ -242,7 +261,7 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Deletar promoção (admin)
+     * Deletar promoção (admin) - LIMPAR CACHE
      * DELETE /api/promocoes/{id}
      */
     public function destroy($id)
@@ -258,9 +277,27 @@ class PromocaoController extends Controller
 
         $promocao->delete();
 
+        $this->clearPromocaoCache();
+
         return response()->json([
             'success' => true,
             'message' => 'Promoção removida com sucesso'
         ]);
+    }
+
+    /**
+     * Limpar cache de promoções
+     */
+    private function clearPromocaoCache()
+    {
+        Cache::forget('promocoes_all');
+        Cache::forget('promocoes_ativas');
+
+        // Limpar cache de códigos (pode ter vários)
+        $keys = Cache::get('promocao_codigos_keys', []);
+        foreach ($keys as $key) {
+            Cache::forget($key);
+        }
+        Cache::forget('promocao_codigos_keys');
     }
 }

@@ -4,28 +4,33 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Avaliacao;
+use App\Models\User;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
 
 class AvaliacaoController extends Controller
 {
     /**
-     * Listar avaliações (admin)
+     * Listar avaliações (admin) - COM CACHE
      * GET /api/admin/avaliacoes
      */
     public function index(Request $request)
     {
-        $query = Avaliacao::with(['cliente', 'prestador', 'pedido']);
+        $cacheKey = 'admin_avaliacoes_' . md5($request->fullUrl());
 
-        if ($request->has('prestador_id')) {
-            $query->where('prestador_id', $request->prestador_id);
-        }
+        $avaliacoes = Cache::remember($cacheKey, 300, function() use ($request) {
+            $query = Avaliacao::with(['cliente:id,nome,foto', 'prestador:id,nome,foto', 'pedido:id,numero,status']);
 
-        if ($request->has('nota')) {
-            $query->where('nota', $request->nota);
-        }
+            if ($request->has('prestador_id')) {
+                $query->where('prestador_id', $request->prestador_id);
+            }
 
-        $avaliacoes = $query->orderBy('created_at', 'desc')->paginate(20);
+            if ($request->has('nota')) {
+                $query->where('nota', $request->nota);
+            }
+
+            return $query->orderBy('created_at', 'desc')->paginate(20);
+        });
 
         return response()->json([
             'success' => true,
@@ -34,12 +39,16 @@ class AvaliacaoController extends Controller
     }
 
     /**
-     * Mostrar uma avaliação
+     * Mostrar uma avaliação - COM CACHE
      * GET /api/admin/avaliacoes/{id}
      */
     public function show($id)
     {
-        $avaliacao = Avaliacao::with(['cliente', 'prestador', 'pedido'])->find($id);
+        $cacheKey = "avaliacao_{$id}";
+
+        $avaliacao = Cache::remember($cacheKey, 3600, function() use ($id) {
+            return Avaliacao::with(['cliente:id,nome,foto', 'prestador:id,nome,foto', 'pedido:id,numero,status'])->find($id);
+        });
 
         if (!$avaliacao) {
             return response()->json([
@@ -55,7 +64,7 @@ class AvaliacaoController extends Controller
     }
 
     /**
-     * Deletar avaliação (admin)
+     * Deletar avaliação (admin) - LIMPAR CACHE
      * DELETE /api/admin/avaliacoes/{id}
      */
     public function destroy($id)
@@ -75,6 +84,9 @@ class AvaliacaoController extends Controller
         // Atualizar média do prestador
         $this->atualizarMediaPrestador($prestadorId);
 
+        // Limpar cache
+        $this->clearAvaliacaoCache($prestadorId);
+
         return response()->json([
             'success' => true,
             'message' => 'Avaliação removida com sucesso'
@@ -87,10 +99,24 @@ class AvaliacaoController extends Controller
     private function atualizarMediaPrestador($prestadorId)
     {
         $media = Avaliacao::where('prestador_id', $prestadorId)->avg('nota');
+        $total = Avaliacao::where('prestador_id', $prestadorId)->count();
 
-        \App\Models\User::where('id', $prestadorId)->update([
+        User::where('id', $prestadorId)->update([
             'media_avaliacao' => round($media ?? 0, 1),
-            'total_avaliacoes' => Avaliacao::where('prestador_id', $prestadorId)->count()
+            'total_avaliacoes' => $total
         ]);
+    }
+
+    /**
+     * Limpar cache de avaliações
+     */
+    private function clearAvaliacaoCache($prestadorId)
+    {
+        Cache::forget("prestador_stats_{$prestadorId}");
+        Cache::forget("prestador_avaliacoes_recentes_{$prestadorId}_5");
+
+        for ($page = 1; $page <= 5; $page++) {
+            Cache::forget("admin_avaliacoes_page_{$page}");
+        }
     }
 }

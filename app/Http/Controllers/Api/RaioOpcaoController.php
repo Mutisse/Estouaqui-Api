@@ -1,23 +1,25 @@
 <?php
-// app/Http/Controllers/Api/RaioOpcaoController.php
 
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\RaioOpcao;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 
 class RaioOpcaoController extends Controller
 {
     /**
-     * Listar todas as opções de raio
+     * Listar todas as opções de raio - COM CACHE
      * GET /api/raio-opcoes
      */
     public function index()
     {
-        $opcoes = RaioOpcao::where('ativo', true)
-            ->orderBy('ordem')
-            ->get();
+        $opcoes = Cache::remember('raio_opcoes_all', 3600, function() {
+            return RaioOpcao::where('ativo', true)
+                ->orderBy('ordem')
+                ->get();
+        });
 
         return response()->json([
             'success' => true,
@@ -26,20 +28,22 @@ class RaioOpcaoController extends Controller
     }
 
     /**
-     * Listar opções para select
+     * Listar opções para select - COM CACHE
      * GET /api/raio-opcoes/options
      */
     public function options()
     {
-        $opcoes = RaioOpcao::where('ativo', true)
-            ->orderBy('ordem')
-            ->get();
+        $options = Cache::remember('raio_opcoes_options', 3600, function() {
+            $opcoes = RaioOpcao::where('ativo', true)
+                ->orderBy('ordem')
+                ->get();
 
-        $options = $opcoes->map(function ($opcao) {
-            return [
-                'label' => $opcao->label,
-                'value' => $opcao->valor
-            ];
+            return $opcoes->map(function ($opcao) {
+                return [
+                    'label' => $opcao->label,
+                    'value' => $opcao->valor
+                ];
+            });
         });
 
         return response()->json([

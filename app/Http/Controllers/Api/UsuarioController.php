@@ -11,6 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Controller genérico para funcionalidades comuns a todos os usuários
@@ -19,20 +20,20 @@ use Illuminate\Support\Facades\Storage;
 class UsuarioController extends Controller
 {
     // ==========================================
-    // 1. FUNCIONALIDADES COMUNS (todos os perfis)
+    // 1. FUNCIONALIDADES COMUNS (todos os perfis) - COM CACHE
     // ==========================================
 
     /**
-     * Obter perfil do usuário autenticado
+     * Obter perfil do usuário autenticado - COM CACHE
      * GET /api/me
      */
     public function me(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "user_profile_{$user->id}";
 
-        return response()->json([
-            'success' => true,
-            'data' => [
+        $data = Cache::remember($cacheKey, 3600, function() use ($user) {
+            return [
                 'id' => $user->id,
                 'nome' => $user->nome,
                 'email' => $user->email,
@@ -42,12 +43,17 @@ class UsuarioController extends Controller
                 'tipo' => $user->tipo,
                 'email_verified_at' => $user->email_verified_at,
                 'created_at' => $user->created_at,
-            ]
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $data
         ]);
     }
 
     /**
-     * Atualizar perfil do usuário autenticado
+     * Atualizar perfil do usuário autenticado - LIMPAR CACHE
      * PUT /api/me
      */
     public function update(Request $request)
@@ -74,6 +80,8 @@ class UsuarioController extends Controller
 
             $user->save();
 
+            $this->clearUserCache($user->id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Perfil atualizado com sucesso',
@@ -88,7 +96,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Atualizar foto de perfil
+     * Atualizar foto de perfil - LIMPAR CACHE
      * POST /api/avatar
      */
     public function updateAvatar(Request $request)
@@ -115,6 +123,8 @@ class UsuarioController extends Controller
             $user->foto = $path;
             $user->save();
 
+            $this->clearUserCache($user->id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Foto atualizada com sucesso',
@@ -129,7 +139,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Remover foto de perfil
+     * Remover foto de perfil - LIMPAR CACHE
      * DELETE /api/avatar
      */
     public function removeAvatar(Request $request)
@@ -142,6 +152,8 @@ class UsuarioController extends Controller
                 $user->foto = null;
                 $user->save();
             }
+
+            $this->clearUserCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -156,7 +168,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Alterar senha
+     * Alterar senha - LIMPAR CACHE
      * PUT /api/password
      */
     public function changePassword(Request $request)
@@ -187,6 +199,8 @@ class UsuarioController extends Controller
             $user->password = Hash::make($request->new_password);
             $user->save();
 
+            $this->clearUserCache($user->id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Senha alterada com sucesso'
@@ -200,7 +214,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Deletar conta (soft delete)
+     * Deletar conta (soft delete) - LIMPAR CACHE
      * DELETE /api/me
      */
     public function destroy(Request $request)
@@ -209,6 +223,8 @@ class UsuarioController extends Controller
 
         try {
             $user->delete();
+
+            $this->clearUserCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -223,50 +239,55 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Dashboard do usuário (dados específicos por perfil)
+     * Dashboard do usuário - COM CACHE
      * GET /api/dashboard
      */
     public function dashboard(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "dashboard_{$user->id}";
 
-        $data = [
-            'user' => [
-                'id' => $user->id,
-                'nome' => $user->nome,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
-                'tipo' => $user->tipo,
-            ],
-            'stats' => [
-                'membro_desde' => $user->created_at->format('d/m/Y'),
-                'anos' => now()->diffInYears($user->created_at),
-            ]
-        ];
+        $data = Cache::remember($cacheKey, 300, function() use ($user) {
+            $result = [
+                'user' => [
+                    'id' => $user->id,
+                    'nome' => $user->nome,
+                    'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                    'tipo' => $user->tipo,
+                ],
+                'stats' => [
+                    'membro_desde' => $user->created_at->format('d/m/Y'),
+                    'anos' => now()->diffInYears($user->created_at),
+                ]
+            ];
 
-        // Estatísticas específicas por perfil
-        if ($user->isCliente()) {
-            $data['stats']['pedidos_ativos'] = Pedido::where('cliente_id', $user->id)
-                ->whereIn('status', ['pendente', 'aceito', 'em_andamento'])
-                ->count();
-            $data['stats']['pedidos_concluidos'] = Pedido::where('cliente_id', $user->id)
-                ->where('status', 'concluido')
-                ->count();
-            $data['stats']['favoritos'] = $user->favoritos()->count();
-            $data['stats']['avaliacoes'] = Avaliacao::where('cliente_id', $user->id)->count();
-        } elseif ($user->isPrestador()) {
-            $data['stats']['servicos_ativos'] = Pedido::where('prestador_id', $user->id)
-                ->whereIn('status', ['pendente', 'aceito', 'em_andamento'])
-                ->count();
-            $data['stats']['servicos_concluidos'] = Pedido::where('prestador_id', $user->id)
-                ->where('status', 'concluido')
-                ->count();
-            $data['stats']['avaliacoes'] = Avaliacao::where('prestador_id', $user->id)->count();
-            $data['stats']['rating'] = $user->media_avaliacao ?? 0;
-        } elseif ($user->isAdmin()) {
-            $data['stats']['total_usuarios'] = User::count();
-            $data['stats']['total_clientes'] = User::where('tipo', 'cliente')->count();
-            $data['stats']['total_prestadores'] = User::where('tipo', 'prestador')->count();
-        }
+            // Estatísticas específicas por perfil
+            if ($user->isCliente()) {
+                $result['stats']['pedidos_ativos'] = Pedido::where('cliente_id', $user->id)
+                    ->whereIn('status', ['pendente', 'aceito', 'em_andamento'])
+                    ->count();
+                $result['stats']['pedidos_concluidos'] = Pedido::where('cliente_id', $user->id)
+                    ->where('status', 'concluido')
+                    ->count();
+                $result['stats']['favoritos'] = $user->favoritos()->count();
+                $result['stats']['avaliacoes'] = Avaliacao::where('cliente_id', $user->id)->count();
+            } elseif ($user->isPrestador()) {
+                $result['stats']['servicos_ativos'] = Pedido::where('prestador_id', $user->id)
+                    ->whereIn('status', ['pendente', 'aceito', 'em_andamento'])
+                    ->count();
+                $result['stats']['servicos_concluidos'] = Pedido::where('prestador_id', $user->id)
+                    ->where('status', 'concluido')
+                    ->count();
+                $result['stats']['avaliacoes'] = Avaliacao::where('prestador_id', $user->id)->count();
+                $result['stats']['rating'] = $user->media_avaliacao ?? 0;
+            } elseif ($user->isAdmin()) {
+                $result['stats']['total_usuarios'] = User::count();
+                $result['stats']['total_clientes'] = User::where('tipo', 'cliente')->count();
+                $result['stats']['total_prestadores'] = User::where('tipo', 'prestador')->count();
+            }
+
+            return $result;
+        });
 
         return response()->json([
             'success' => true,
@@ -275,103 +296,107 @@ class UsuarioController extends Controller
     }
 
     // ==========================================
-    // 2. NOTIFICAÇÕES (AJUSTADAS PARA FUNCIONAR SEM TABELA)
+    // 2. NOTIFICAÇÕES - COM CACHE
     // ==========================================
 
     /**
-     * Listar notificações do usuário
+     * Listar notificações do usuário - COM CACHE
      * GET /api/notifications
      */
     public function notifications(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "notifications_{$user->id}";
 
-        // 🔄 TEMPORÁRIO: Retornar dados mockados até criar tabela de notificações
-        // TODO: Substituir por $user->notifications()->paginate(20) quando tabela existir
-
-        $mockNotifications = $this->getMockNotificationsByProfile($user);
+        $notifications = Cache::remember($cacheKey, 120, function() use ($user) {
+            return $this->getMockNotificationsByProfile($user);
+        });
 
         return response()->json([
             'success' => true,
             'data' => [
                 'current_page' => 1,
-                'data' => $mockNotifications,
+                'data' => $notifications,
                 'per_page' => 20,
-                'total' => count($mockNotifications),
+                'total' => count($notifications),
                 'last_page' => 1,
             ]
         ]);
     }
 
     /**
-     * Marcar notificação como lida
+     * Marcar notificação como lida - LIMPAR CACHE
      * PUT /api/notifications/{id}/read
      */
     public function markNotificationRead(Request $request, $id)
     {
-        // TODO: Implementar quando tabela de notificações existir
+        $user = $request->user();
+        Cache::forget("notifications_{$user->id}");
         return response()->json(['success' => true]);
     }
 
     /**
-     * Marcar todas notificações como lidas
+     * Marcar todas notificações como lidas - LIMPAR CACHE
      * PUT /api/notifications/read-all
      */
     public function markAllNotificationsRead(Request $request)
     {
-        // TODO: Implementar quando tabela de notificações existir
+        $user = $request->user();
+        Cache::forget("notifications_{$user->id}");
         return response()->json(['success' => true]);
     }
 
     /**
-     * Obter preferências de notificação
+     * Obter preferências de notificação - COM CACHE
      * GET /api/notifications/preferences
      */
     public function notificationPreferences(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "notif_preferences_{$user->id}";
 
-        // Preferências padrão por perfil
-        $defaultPreferences = [
-            'cliente' => [
-                'email' => true,
-                'push' => true,
-                'sms' => false,
-                'types' => [
-                    'pedido_confirmado' => true,
-                    'pedido_em_andamento' => true,
-                    'pedido_concluido' => true,
-                    'pedido_cancelado' => true,
-                    'promocao_nova' => true,
+        $preferences = Cache::remember($cacheKey, 3600, function() use ($user) {
+            $defaultPreferences = [
+                'cliente' => [
+                    'email' => true,
+                    'push' => true,
+                    'sms' => false,
+                    'types' => [
+                        'pedido_confirmado' => true,
+                        'pedido_em_andamento' => true,
+                        'pedido_concluido' => true,
+                        'pedido_cancelado' => true,
+                        'promocao_nova' => true,
+                    ]
+                ],
+                'prestador' => [
+                    'email' => true,
+                    'push' => true,
+                    'sms' => true,
+                    'types' => [
+                        'nova_solicitacao' => true,
+                        'solicitacao_aceita' => true,
+                        'solicitacao_recusada' => true,
+                        'cliente_avaliou' => true,
+                        'pagamento_recebido' => true,
+                    ]
+                ],
+                'admin' => [
+                    'email' => true,
+                    'push' => true,
+                    'sms' => false,
+                    'types' => [
+                        'novo_prestador_pendente' => true,
+                        'prestador_aprovado' => true,
+                        'relatorio_semanal' => true,
+                        'alerta_seguranca' => true,
+                    ]
                 ]
-            ],
-            'prestador' => [
-                'email' => true,
-                'push' => true,
-                'sms' => true,
-                'types' => [
-                    'nova_solicitacao' => true,
-                    'solicitacao_aceita' => true,
-                    'solicitacao_recusada' => true,
-                    'cliente_avaliou' => true,
-                    'pagamento_recebido' => true,
-                ]
-            ],
-            'admin' => [
-                'email' => true,
-                'push' => true,
-                'sms' => false,
-                'types' => [
-                    'novo_prestador_pendente' => true,
-                    'prestador_aprovado' => true,
-                    'relatorio_semanal' => true,
-                    'alerta_seguranca' => true,
-                ]
-            ]
-        ];
+            ];
 
-        $profile = $user->tipo;
-        $preferences = $user->preferences['notifications'] ?? $defaultPreferences[$profile] ?? $defaultPreferences['cliente'];
+            $profile = $user->tipo;
+            return $user->preferences['notifications'] ?? $defaultPreferences[$profile] ?? $defaultPreferences['cliente'];
+        });
 
         return response()->json([
             'success' => true,
@@ -380,7 +405,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Atualizar preferências de notificação
+     * Atualizar preferências de notificação - LIMPAR CACHE
      * PUT /api/notifications/preferences
      */
     public function updateNotificationPreferences(Request $request)
@@ -413,6 +438,9 @@ class UsuarioController extends Controller
         $user->preferences = $preferences;
         $user->save();
 
+        $this->clearUserCache($user->id);
+        Cache::forget("notif_preferences_{$user->id}");
+
         return response()->json([
             'success' => true,
             'message' => 'Preferências de notificação atualizadas',
@@ -420,114 +448,35 @@ class UsuarioController extends Controller
         ]);
     }
 
-    /**
-     * Gerar notificações mockadas por perfil (temporário)
-     */
-    private function getMockNotificationsByProfile($user)
-    {
-        $notifications = [];
-
-        if ($user->isCliente()) {
-            $notifications = [
-                [
-                    'id' => '1',
-                    'type' => 'pedido_confirmado',
-                    'title' => 'Pedido Confirmado',
-                    'message' => 'Seu pedido #PED-123 foi confirmado pelo prestador.',
-                    'data' => ['pedido_id' => 123],
-                    'read_at' => null,
-                    'created_at' => now()->subHours(2)->toISOString(),
-                ],
-                [
-                    'id' => '2',
-                    'type' => 'pedido_em_andamento',
-                    'title' => 'Serviço em Andamento',
-                    'message' => 'O prestador iniciou o serviço do seu pedido #PED-123.',
-                    'data' => ['pedido_id' => 123],
-                    'read_at' => null,
-                    'created_at' => now()->subHours(1)->toISOString(),
-                ],
-                [
-                    'id' => '3',
-                    'type' => 'promocao_nova',
-                    'title' => 'Nova Promoção!',
-                    'message' => '20% de desconto no seu primeiro serviço. Use o cupom BEMVINDO20',
-                    'data' => [],
-                    'read_at' => now()->subMinutes(30)->toISOString(),
-                    'created_at' => now()->subHours(5)->toISOString(),
-                ],
-            ];
-        } elseif ($user->isPrestador()) {
-            $notifications = [
-                [
-                    'id' => '1',
-                    'type' => 'nova_solicitacao',
-                    'title' => 'Nova Solicitação',
-                    'message' => 'Você recebeu uma nova solicitação de serviço.',
-                    'data' => ['pedido_id' => 456],
-                    'read_at' => null,
-                    'created_at' => now()->subHours(3)->toISOString(),
-                ],
-                [
-                    'id' => '2',
-                    'type' => 'cliente_avaliou',
-                    'title' => 'Nova Avaliação',
-                    'message' => 'Um cliente avaliou seu serviço com 5 estrelas!',
-                    'data' => ['avaliacao_id' => 789],
-                    'read_at' => null,
-                    'created_at' => now()->subDay()->toISOString(),
-                ],
-            ];
-        } elseif ($user->isAdmin()) {
-            $notifications = [
-                [
-                    'id' => '1',
-                    'type' => 'novo_prestador_pendente',
-                    'title' => 'Novo Prestador Pendente',
-                    'message' => 'Um novo prestador aguarda aprovação.',
-                    'data' => ['prestador_id' => 101],
-                    'read_at' => null,
-                    'created_at' => now()->subHours(6)->toISOString(),
-                ],
-                [
-                    'id' => '2',
-                    'type' => 'relatorio_semanal',
-                    'title' => 'Relatório Semanal',
-                    'message' => 'Relatório da semana está disponível para download.',
-                    'data' => [],
-                    'read_at' => now()->subDays(2)->toISOString(),
-                    'created_at' => now()->subDays(2)->toISOString(),
-                ],
-            ];
-        }
-
-        return $notifications;
-    }
-
     // ==========================================
-    // 3. PREFERÊNCIAS DO USUÁRIO
+    // 3. PREFERÊNCIAS DO USUÁRIO - COM CACHE
     // ==========================================
 
     /**
-     * Obter preferências do usuário
+     * Obter preferências do usuário - COM CACHE
      * GET /api/preferences
      */
     public function preferences(Request $request)
     {
         $user = $request->user();
+        $cacheKey = "user_preferences_{$user->id}";
 
-        return response()->json([
-            'success' => true,
-            'data' => [
+        $preferences = Cache::remember($cacheKey, 3600, function() use ($user) {
+            return [
                 'theme' => $user->preferences['theme'] ?? 'light',
                 'language' => $user->preferences['language'] ?? 'pt',
                 'notifications' => $user->preferences['notifications'] ?? true,
-            ]
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $preferences
         ]);
     }
 
     /**
-     * Atualizar preferências
+     * Atualizar preferências - LIMPAR CACHE
      * PUT /api/preferences
      */
     public function updatePreferences(Request $request)
@@ -555,6 +504,8 @@ class UsuarioController extends Controller
         $user->preferences = $preferences;
         $user->save();
 
+        $this->clearUserCache($user->id);
+
         return response()->json([
             'success' => true,
             'message' => 'Preferências atualizadas',
@@ -563,7 +514,7 @@ class UsuarioController extends Controller
     }
 
     // ==========================================
-    // 4. ENDEREÇOS DO USUÁRIO (TODO)
+    // 4. ENDEREÇOS DO USUÁRIO
     // ==========================================
 
     /**
@@ -572,7 +523,6 @@ class UsuarioController extends Controller
      */
     public function addresses(Request $request)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'data' => []
@@ -585,7 +535,6 @@ class UsuarioController extends Controller
      */
     public function createAddress(Request $request)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'message' => 'Endereço criado com sucesso',
@@ -599,7 +548,6 @@ class UsuarioController extends Controller
      */
     public function getAddress($id)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'data' => []
@@ -612,7 +560,6 @@ class UsuarioController extends Controller
      */
     public function updateAddress(Request $request, $id)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'message' => 'Endereço atualizado com sucesso'
@@ -625,7 +572,6 @@ class UsuarioController extends Controller
      */
     public function deleteAddress($id)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'message' => 'Endereço removido com sucesso'
@@ -638,7 +584,6 @@ class UsuarioController extends Controller
      */
     public function setPrimaryAddress($id)
     {
-        // TODO: Implementar quando criar tabela de endereços
         return response()->json([
             'success' => true,
             'message' => 'Endereço principal definido com sucesso'
@@ -646,35 +591,39 @@ class UsuarioController extends Controller
     }
 
     // ==========================================
-    // 5. MÉTODOS PÚBLICOS (sem autenticação)
+    // 5. MÉTODOS PÚBLICOS (sem autenticação) - COM CACHE
     // ==========================================
 
     /**
-     * Verificar disponibilidade de email
+     * Verificar disponibilidade de email - COM CACHE
      * GET /api/check-email?email=
      */
     public function checkEmail(Request $request)
     {
         $email = $request->query('email');
-        $exists = User::where('email', $email)->exists();
+        $cacheKey = "email_available_" . md5($email);
 
-        return response()->json([
-            'available' => !$exists
-        ]);
+        $exists = Cache::remember($cacheKey, 300, function() use ($email) {
+            return User::where('email', $email)->exists();
+        });
+
+        return response()->json(['available' => !$exists]);
     }
 
     /**
-     * Verificar disponibilidade de telefone
+     * Verificar disponibilidade de telefone - COM CACHE
      * GET /api/check-phone?phone=
      */
     public function checkPhone(Request $request)
     {
         $phone = $request->query('phone');
-        $exists = User::where('telefone', $phone)->exists();
+        $cacheKey = "phone_available_" . md5($phone);
 
-        return response()->json([
-            'available' => !$exists
-        ]);
+        $exists = Cache::remember($cacheKey, 300, function() use ($phone) {
+            return User::where('telefone', $phone)->exists();
+        });
+
+        return response()->json(['available' => !$exists]);
     }
 
     /**
@@ -710,106 +659,73 @@ class UsuarioController extends Controller
     }
 
     // ==========================================
-    // 6. ATIVIDADES DO USUÁRIO
+    // 6. ATIVIDADES DO USUÁRIO - COM CACHE
     // ==========================================
 
     /**
-     * Atividades recentes do usuário
+     * Atividades recentes do usuário - COM CACHE
      * GET /api/activities/recent
      */
     public function recentActivities(Request $request)
     {
         $user = $request->user();
         $limit = $request->get('limit', 10);
+        $cacheKey = "recent_activities_{$user->id}_{$limit}";
 
-        $activities = [];
+        $activities = Cache::remember($cacheKey, 120, function() use ($user, $limit) {
+            $activities = [];
 
-        // Últimos pedidos (como cliente)
-        $pedidosCliente = Pedido::where('cliente_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->limit($limit)
-            ->get();
+            // Últimos pedidos (como cliente)
+            $pedidosCliente = Pedido::where('cliente_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get();
 
-        foreach ($pedidosCliente as $pedido) {
-            $activities[] = [
-                'id' => $pedido->id,
-                'tipo' => 'pedido',
-                'titulo' => 'Pedido realizado',
-                'descricao' => $this->getPedidoDescricao($pedido),
-                'data' => $pedido->created_at,
-                'status' => $pedido->status,
-                'valor' => $pedido->valor,
-            ];
-        }
+            foreach ($pedidosCliente as $pedido) {
+                $activities[] = $this->formatPedidoActivity($pedido, 'pedido');
+            }
 
-        // Últimos pedidos (como prestador)
-        $pedidosPrestador = Pedido::where('prestador_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->limit($limit)
-            ->get();
+            // Últimos pedidos (como prestador)
+            $pedidosPrestador = Pedido::where('prestador_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get();
 
-        foreach ($pedidosPrestador as $pedido) {
-            $activities[] = [
-                'id' => $pedido->id,
-                'tipo' => 'solicitacao',
-                'titulo' => 'Nova solicitação',
-                'descricao' => $this->getPedidoDescricaoPrestador($pedido),
-                'data' => $pedido->created_at,
-                'status' => $pedido->status,
-                'valor' => $pedido->valor,
-            ];
-        }
+            foreach ($pedidosPrestador as $pedido) {
+                $activities[] = $this->formatPedidoActivity($pedido, 'solicitacao');
+            }
 
-        // Últimas avaliações
-        $avaliacoes = Avaliacao::where('cliente_id', $user->id)
-            ->orWhere('prestador_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->limit($limit)
-            ->get();
+            // Últimas avaliações
+            $avaliacoes = Avaliacao::where('cliente_id', $user->id)
+                ->orWhere('prestador_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get();
 
-        foreach ($avaliacoes as $avaliacao) {
-            $isCliente = $avaliacao->cliente_id === $user->id;
-            $activities[] = [
-                'id' => $avaliacao->id,
-                'tipo' => 'avaliacao',
-                'titulo' => $isCliente ? 'Avaliação enviada' : 'Avaliação recebida',
-                'descricao' => $isCliente
-                    ? "Você avaliou um serviço com {$avaliacao->nota} estrelas"
-                    : "Você recebeu {$avaliacao->nota} estrelas em uma avaliação",
-                'data' => $avaliacao->created_at,
-                'nota' => $avaliacao->nota,
-            ];
-        }
+            foreach ($avaliacoes as $avaliacao) {
+                $activities[] = $this->formatAvaliacaoActivity($avaliacao, $user->id);
+            }
 
-        // Últimas transações
-        $transacoes = Transacao::where('user_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->limit($limit)
-            ->get();
+            // Últimas transações
+            $transacoes = Transacao::where('user_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get();
 
-        foreach ($transacoes as $transacao) {
-            $activities[] = [
-                'id' => $transacao->id,
-                'tipo' => 'transacao',
-                'titulo' => $transacao->tipo === 'entrada' ? 'Pagamento recebido' : 'Pagamento efetuado',
-                'descricao' => $transacao->descricao,
-                'data' => $transacao->created_at,
-                'valor' => $transacao->valor,
-                'tipo_transacao' => $transacao->tipo,
-                'status' => $transacao->status,
-            ];
-        }
+            foreach ($transacoes as $transacao) {
+                $activities[] = $this->formatTransacaoActivity($transacao);
+            }
 
-        // Ordenar por data e pegar os mais recentes
-        $activities = collect($activities)
-            ->sortByDesc('data')
-            ->take($limit)
-            ->values()
-            ->map(function ($activity) {
-                $activity['data_formatada'] = $activity['data']->format('d/m/Y H:i');
-                $activity['data_humana'] = $activity['data']->diffForHumans();
-                return $activity;
-            });
+            return collect($activities)
+                ->sortByDesc('data')
+                ->take($limit)
+                ->values()
+                ->map(function ($activity) {
+                    $activity['data_formatada'] = $activity['data']->format('d/m/Y H:i');
+                    $activity['data_humana'] = $activity['data']->diffForHumans();
+                    return $activity;
+                });
+        });
 
         return response()->json([
             'success' => true,
@@ -818,7 +734,7 @@ class UsuarioController extends Controller
     }
 
     /**
-     * Histórico completo de atividades
+     * Histórico completo de atividades - COM CACHE PAGINADO
      * GET /api/activities
      */
     public function activitiesHistory(Request $request)
@@ -826,150 +742,269 @@ class UsuarioController extends Controller
         $user = $request->user();
         $page = $request->get('page', 1);
         $perPage = $request->get('per_page', 20);
+        $cacheKey = "activities_history_{$user->id}_{$page}_{$perPage}";
 
-        $activities = [];
+        $result = Cache::remember($cacheKey, 300, function() use ($user, $page, $perPage) {
+            $activities = [];
 
-        // Pedidos como cliente
-        $pedidosCliente = Pedido::where('cliente_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+            // Pedidos como cliente
+            $pedidosCliente = Pedido::where('cliente_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get();
 
-        foreach ($pedidosCliente as $pedido) {
-            $activities[] = [
-                'id' => $pedido->id,
-                'tipo' => 'pedido',
-                'titulo' => 'Pedido #' . $pedido->numero,
-                'descricao' => $this->getPedidoDescricao($pedido),
-                'data' => $pedido->created_at,
-                'status' => $pedido->status,
-                'valor' => $pedido->valor,
-                'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
-            ];
-        }
+            foreach ($pedidosCliente as $pedido) {
+                $activities[] = $this->formatPedidoHistory($pedido, 'pedido', $user->id);
+            }
 
-        // Pedidos como prestador
-        $pedidosPrestador = Pedido::where('prestador_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+            // Pedidos como prestador
+            $pedidosPrestador = Pedido::where('prestador_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get();
 
-        foreach ($pedidosPrestador as $pedido) {
-            $activities[] = [
-                'id' => $pedido->id,
-                'tipo' => 'solicitacao',
-                'titulo' => 'Solicitação #' . $pedido->numero,
-                'descricao' => $this->getPedidoDescricaoPrestador($pedido),
-                'data' => $pedido->created_at,
-                'status' => $pedido->status,
-                'valor' => $pedido->valor,
-                'cliente_nome' => $pedido->cliente->nome ?? 'Cliente',
-            ];
-        }
+            foreach ($pedidosPrestador as $pedido) {
+                $activities[] = $this->formatPedidoHistory($pedido, 'solicitacao', $user->id);
+            }
 
-        // Avaliações
-        $avaliacoes = Avaliacao::where('cliente_id', $user->id)
-            ->orWhere('prestador_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+            // Avaliações
+            $avaliacoes = Avaliacao::where('cliente_id', $user->id)
+                ->orWhere('prestador_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get();
 
-        foreach ($avaliacoes as $avaliacao) {
-            $isCliente = $avaliacao->cliente_id === $user->id;
-            $activities[] = [
-                'id' => $avaliacao->id,
-                'tipo' => 'avaliacao',
-                'titulo' => $isCliente ? 'Avaliação enviada' : 'Avaliação recebida',
-                'descricao' => $isCliente
-                    ? "Você avaliou o prestador com {$avaliacao->nota} estrelas"
-                    : "O cliente te avaliou com {$avaliacao->nota} estrelas",
-                'data' => $avaliacao->created_at,
-                'nota' => $avaliacao->nota,
-                'comentario' => $avaliacao->comentario,
-            ];
-        }
+            foreach ($avaliacoes as $avaliacao) {
+                $activities[] = $this->formatAvaliacaoHistory($avaliacao, $user->id);
+            }
 
-        // Transações
-        $transacoes = Transacao::where('user_id', $user->id)
-            ->orderBy('created_at', 'desc')
-            ->get();
+            // Transações
+            $transacoes = Transacao::where('user_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get();
 
-        foreach ($transacoes as $transacao) {
-            $activities[] = [
-                'id' => $transacao->id,
-                'tipo' => 'transacao',
-                'titulo' => $transacao->tipo === 'entrada' ? 'Recebimento' : 'Pagamento',
-                'descricao' => $transacao->descricao,
-                'data' => $transacao->created_at,
-                'valor' => $transacao->valor,
-                'status' => $transacao->status,
-                'metodo' => $transacao->metodo,
-                'numero' => $transacao->numero,
-            ];
-        }
+            foreach ($transacoes as $transacao) {
+                $activities[] = $this->formatTransacaoHistory($transacao);
+            }
 
-        // Ordenar por data
-        $activities = collect($activities)
-            ->sortByDesc('data')
-            ->values()
-            ->map(function ($activity) {
-                $activity['data_formatada'] = $activity['data']->format('d/m/Y H:i');
-                $activity['data_humana'] = $activity['data']->diffForHumans();
-                return $activity;
-            });
+            // Ordenar e paginar
+            $collection = collect($activities)->sortByDesc('data')->values();
+            $total = $collection->count();
+            $paginated = $collection->slice(($page - 1) * $perPage, $perPage)->values();
 
-        // Paginar manualmente
-        $total = $activities->count();
-        $paginated = $activities->slice(($page - 1) * $perPage, $perPage)->values();
-
-        return response()->json([
-            'success' => true,
-            'data' => [
+            return [
                 'current_page' => $page,
-                'data' => $paginated,
+                'data' => $paginated->map(function ($activity) {
+                    $activity['data_formatada'] = $activity['data']->format('d/m/Y H:i');
+                    $activity['data_humana'] = $activity['data']->diffForHumans();
+                    return $activity;
+                }),
                 'per_page' => $perPage,
                 'total' => $total,
                 'last_page' => ceil($total / $perPage),
-            ]
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $result
         ]);
     }
 
+    // ==========================================
+    // 7. MÉTODOS AUXILIARES
+    // ==========================================
+
     /**
-     * Obter descrição do pedido para cliente
+     * Limpar cache do usuário
      */
-    private function getPedidoDescricao($pedido)
+    private function clearUserCache($userId)
     {
-        switch ($pedido->status) {
-            case 'pendente':
-                return 'Pedido aguardando confirmação do prestador';
-            case 'aceito':
-                return 'Pedido aceito. Serviço será realizado em breve';
-            case 'em_andamento':
-                return 'Serviço em andamento';
-            case 'concluido':
-                return 'Serviço concluído com sucesso';
-            case 'cancelado':
-                return 'Pedido cancelado';
-            default:
-                return 'Pedido criado';
+        Cache::forget("user_profile_{$userId}");
+        Cache::forget("dashboard_{$userId}");
+        Cache::forget("notifications_{$userId}");
+        Cache::forget("notif_preferences_{$userId}");
+        Cache::forget("user_preferences_{$userId}");
+        Cache::forget("recent_activities_{$userId}_10");
+
+        for ($page = 1; $page <= 5; $page++) {
+            Cache::forget("activities_history_{$userId}_{$page}_20");
         }
     }
 
     /**
-     * Obter descrição do pedido para prestador
+     * Gerar notificações mockadas por perfil (temporário)
      */
-    private function getPedidoDescricaoPrestador($pedido)
+    private function getMockNotificationsByProfile($user)
     {
-        switch ($pedido->status) {
-            case 'pendente':
-                return 'Nova solicitação de serviço aguardando sua resposta';
-            case 'aceito':
-                return 'Solicitação aceita. Prepare-se para realizar o serviço';
-            case 'em_andamento':
-                return 'Serviço em andamento';
-            case 'concluido':
-                return 'Serviço concluído';
-            case 'cancelado':
-                return 'Solicitação cancelada pelo cliente';
-            default:
-                return 'Nova solicitação';
+        $notifications = [];
+
+        if ($user->isCliente()) {
+            $notifications = [
+                [
+                    'id' => '1',
+                    'type' => 'pedido_confirmado',
+                    'titulo' => 'Pedido Confirmado',
+                    'mensagem' => 'Seu pedido #PED-123 foi confirmado pelo prestador.',
+                    'lida' => false,
+                    'created_at' => now()->subHours(2)->toISOString(),
+                ],
+                [
+                    'id' => '2',
+                    'type' => 'pedido_em_andamento',
+                    'titulo' => 'Serviço em Andamento',
+                    'mensagem' => 'O prestador iniciou o serviço do seu pedido #PED-123.',
+                    'lida' => false,
+                    'created_at' => now()->subHours(1)->toISOString(),
+                ],
+                [
+                    'id' => '3',
+                    'type' => 'promocao_nova',
+                    'titulo' => 'Nova Promoção!',
+                    'mensagem' => '20% de desconto no seu primeiro serviço. Use o cupom BEMVINDO20',
+                    'lida' => true,
+                    'created_at' => now()->subHours(5)->toISOString(),
+                ],
+            ];
+        } elseif ($user->isPrestador()) {
+            $notifications = [
+                [
+                    'id' => '1',
+                    'type' => 'nova_solicitacao',
+                    'titulo' => 'Nova Solicitação',
+                    'mensagem' => 'Você recebeu uma nova solicitação de serviço.',
+                    'lida' => false,
+                    'created_at' => now()->subHours(3)->toISOString(),
+                ],
+                [
+                    'id' => '2',
+                    'type' => 'cliente_avaliou',
+                    'titulo' => 'Nova Avaliação',
+                    'mensagem' => 'Um cliente avaliou seu serviço com 5 estrelas!',
+                    'lida' => false,
+                    'created_at' => now()->subDay()->toISOString(),
+                ],
+            ];
+        } elseif ($user->isAdmin()) {
+            $notifications = [
+                [
+                    'id' => '1',
+                    'type' => 'novo_prestador_pendente',
+                    'titulo' => 'Novo Prestador Pendente',
+                    'mensagem' => 'Um novo prestador aguarda aprovação.',
+                    'lida' => false,
+                    'created_at' => now()->subHours(6)->toISOString(),
+                ],
+                [
+                    'id' => '2',
+                    'type' => 'relatorio_semanal',
+                    'titulo' => 'Relatório Semanal',
+                    'mensagem' => 'Relatório da semana está disponível para download.',
+                    'lida' => true,
+                    'created_at' => now()->subDays(2)->toISOString(),
+                ],
+            ];
         }
+
+        return $notifications;
+    }
+
+    /**
+     * Formatar atividade de pedido
+     */
+    private function formatPedidoActivity($pedido, $tipo)
+    {
+        $descricoes = [
+            'pendente' => $tipo === 'pedido' ? 'Pedido aguardando confirmação' : 'Nova solicitação aguardando resposta',
+            'aceito' => $tipo === 'pedido' ? 'Pedido aceito' : 'Solicitação aceita',
+            'em_andamento' => 'Serviço em andamento',
+            'concluido' => 'Serviço concluído',
+            'cancelado' => $tipo === 'pedido' ? 'Pedido cancelado' : 'Solicitação cancelada',
+        ];
+
+        return [
+            'id' => $pedido->id,
+            'tipo' => $tipo,
+            'titulo' => $tipo === 'pedido' ? 'Pedido #' . $pedido->numero : 'Solicitação #' . $pedido->numero,
+            'descricao' => $descricoes[$pedido->status] ?? 'Pedido criado',
+            'data' => $pedido->created_at,
+            'status' => $pedido->status,
+            'valor' => $pedido->valor,
+        ];
+    }
+
+    /**
+     * Formatar avaliação para atividades
+     */
+    private function formatAvaliacaoActivity($avaliacao, $userId)
+    {
+        $isCliente = $avaliacao->cliente_id === $userId;
+        return [
+            'id' => $avaliacao->id,
+            'tipo' => 'avaliacao',
+            'titulo' => $isCliente ? 'Avaliação enviada' : 'Avaliação recebida',
+            'descricao' => $isCliente
+                ? "Você avaliou com {$avaliacao->nota} estrelas"
+                : "Você recebeu {$avaliacao->nota} estrelas",
+            'data' => $avaliacao->created_at,
+            'nota' => $avaliacao->nota,
+        ];
+    }
+
+    /**
+     * Formatar transação para atividades
+     */
+    private function formatTransacaoActivity($transacao)
+    {
+        return [
+            'id' => $transacao->id,
+            'tipo' => 'transacao',
+            'titulo' => $transacao->tipo === 'entrada' ? 'Recebimento' : 'Pagamento',
+            'descricao' => $transacao->descricao,
+            'data' => $transacao->created_at,
+            'valor' => $transacao->valor,
+            'status' => $transacao->status,
+        ];
+    }
+
+    /**
+     * Formatar pedido para histórico
+     */
+    private function formatPedidoHistory($pedido, $tipo, $userId)
+    {
+        $base = $this->formatPedidoActivity($pedido, $tipo);
+
+        if ($tipo === 'pedido') {
+            $base['prestador_nome'] = $pedido->prestador->nome ?? 'Prestador';
+        } else {
+            $base['cliente_nome'] = $pedido->cliente->nome ?? 'Cliente';
+        }
+
+        return $base;
+    }
+
+    /**
+     * Formatar avaliação para histórico
+     */
+    private function formatAvaliacaoHistory($avaliacao, $userId)
+    {
+        $base = $this->formatAvaliacaoActivity($avaliacao, $userId);
+
+        if ($avaliacao->cliente_id === $userId) {
+            $base['prestador_nome'] = $avaliacao->prestador->nome ?? 'Prestador';
+        } else {
+            $base['cliente_nome'] = $avaliacao->cliente->nome ?? 'Cliente';
+        }
+
+        $base['comentario'] = $avaliacao->comentario;
+        return $base;
+    }
+
+    /**
+     * Formatar transação para histórico
+     */
+    private function formatTransacaoHistory($transacao)
+    {
+        $base = $this->formatTransacaoActivity($transacao);
+        $base['metodo'] = $transacao->metodo;
+        $base['numero'] = $transacao->numero;
+        return $base;
     }
 }

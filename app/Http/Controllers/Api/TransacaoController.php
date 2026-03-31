@@ -6,30 +6,36 @@ use App\Http\Controllers\Controller;
 use App\Models\Transacao;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 class TransacaoController extends Controller
 {
     /**
-     * Listar transações (admin)
+     * Listar transações (admin) - COM CACHE
      * GET /api/admin/financeiro/transacoes
      */
     public function index(Request $request)
     {
-        $query = Transacao::with('user', 'pedido');
+        $cacheKey = 'admin_transacoes_' . md5($request->fullUrl());
 
-        if ($request->has('tipo')) {
-            $query->where('tipo', $request->tipo);
-        }
+        $transacoes = Cache::remember($cacheKey, 120, function() use ($request) {
+            $query = Transacao::with(['user:id,nome,email,tipo', 'pedido:id,numero,status']);
 
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
+            if ($request->has('tipo')) {
+                $query->where('tipo', $request->tipo);
+            }
 
-        if ($request->has('user_id')) {
-            $query->where('user_id', $request->user_id);
-        }
+            if ($request->has('status')) {
+                $query->where('status', $request->status);
+            }
 
-        $transacoes = $query->orderBy('created_at', 'desc')->paginate(20);
+            if ($request->has('user_id')) {
+                $query->where('user_id', $request->user_id);
+            }
+
+            return $query->orderBy('created_at', 'desc')->paginate(20);
+        });
 
         return response()->json([
             'success' => true,
@@ -38,12 +44,16 @@ class TransacaoController extends Controller
     }
 
     /**
-     * Mostrar uma transação
+     * Mostrar uma transação - COM CACHE
      * GET /api/admin/financeiro/transacoes/{id}
      */
     public function show($id)
     {
-        $transacao = Transacao::with(['user', 'pedido'])->find($id);
+        $cacheKey = "transacao_{$id}";
+
+        $transacao = Cache::remember($cacheKey, 300, function() use ($id) {
+            return Transacao::with(['user:id,nome,email,tipo', 'pedido:id,numero,status'])->find($id);
+        });
 
         if (!$transacao) {
             return response()->json([
@@ -59,7 +69,7 @@ class TransacaoController extends Controller
     }
 
     /**
-     * Criar transação
+     * Criar transação - LIMPAR CACHE
      * POST /api/admin/financeiro/transacoes
      */
     public function store(Request $request)
@@ -91,6 +101,8 @@ class TransacaoController extends Controller
                 'status' => 'pendente',
             ]);
 
+            $this->clearTransacaoCache($request->user_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Transação criada com sucesso',
@@ -105,7 +117,7 @@ class TransacaoController extends Controller
     }
 
     /**
-     * Atualizar status da transação
+     * Atualizar status da transação - LIMPAR CACHE
      * PUT /api/admin/financeiro/transacoes/{id}/status
      */
     public function updateStatus(Request $request, $id)
@@ -137,6 +149,8 @@ class TransacaoController extends Controller
             }
             $transacao->save();
 
+            $this->clearTransacaoCache($transacao->user_id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Status atualizado com sucesso',
@@ -151,34 +165,55 @@ class TransacaoController extends Controller
     }
 
     /**
-     * Resumo financeiro
+     * Resumo financeiro - COM CACHE
      * GET /api/admin/financeiro/resumo
      */
     public function resumo()
     {
-        $saldoAtual = Transacao::where('status', 'concluido')
-            ->where('tipo', 'entrada')
-            ->sum('valor') -
-            Transacao::where('status', 'concluido')
-                ->where('tipo', 'saida')
+        $resumo = Cache::remember('financeiro_resumo', 300, function() {
+            $saldoAtual = Transacao::where('status', 'concluido')
+                ->where('tipo', 'entrada')
+                ->sum('valor') -
+                Transacao::where('status', 'concluido')
+                    ->where('tipo', 'saida')
+                    ->sum('valor');
+
+            $pendente = Transacao::where('status', 'pendente')->sum('valor');
+            $processadoMes = Transacao::where('status', 'concluido')
+                ->whereMonth('created_at', now()->month)
+                ->sum('valor');
+            $comissoes = Transacao::where('tipo', 'comissao')
+                ->whereMonth('created_at', now()->month)
                 ->sum('valor');
 
-        $pendente = Transacao::where('status', 'pendente')->sum('valor');
-        $processadoMes = Transacao::where('status', 'concluido')
-            ->whereMonth('created_at', now()->month)
-            ->sum('valor');
-        $comissoes = Transacao::where('tipo', 'comissao')
-            ->whereMonth('created_at', now()->month)
-            ->sum('valor');
-
-        return response()->json([
-            'success' => true,
-            'data' => [
+            return [
                 'saldo_atual' => $saldoAtual,
                 'pendente' => $pendente,
                 'processado_mes' => $processadoMes,
                 'comissoes' => $comissoes,
-            ]
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $resumo
         ]);
+    }
+
+    /**
+     * Limpar cache de transações
+     */
+    private function clearTransacaoCache($userId = null)
+    {
+        Cache::forget('financeiro_resumo');
+
+        for ($page = 1; $page <= 5; $page++) {
+            Cache::forget("admin_transacoes_page_{$page}");
+        }
+
+        if ($userId) {
+            Cache::forget("prestador_saques_{$userId}");
+            Cache::forget("prestador_ganhos_{$userId}");
+        }
     }
 }
