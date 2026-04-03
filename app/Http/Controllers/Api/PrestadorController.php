@@ -120,7 +120,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 2. SERVIÇOS DO PRESTADOR (COM CACHE)
+    // 2. SERVIÇOS DO PRESTADOR (COM CACHE E TOARRAY)
     // ==========================================
 
     /**
@@ -136,7 +136,8 @@ class PrestadorController extends Controller
             return Servico::where('prestador_id', $user->id)
                 ->with('categoria')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -366,7 +367,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 4. SOLICITAÇÕES/PEDIDOS (COM CACHE)
+    // 4. SOLICITAÇÕES/PEDIDOS (COM CACHE E TOARRAY)
     // ==========================================
 
     /**
@@ -480,7 +481,7 @@ class PrestadorController extends Controller
         $cacheKey = "prestador_categorias_{$user->id}";
 
         $categorias = Cache::remember($cacheKey, 3600, function () use ($user) {
-            return $user->categorias()->get();
+            return $user->categorias()->get()->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -565,7 +566,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 7. PERFIL DO PRESTADOR (público)
+    // 7. PERFIL DO PRESTADOR (público) - COM TOARRAY
     // ==========================================
 
     /**
@@ -616,12 +617,13 @@ class PrestadorController extends Controller
                     return null;
                 }
 
-                $servicos = Servico::where('prestador_id', $id)->get();
-                $categorias = $prestador->categorias()->get();
+                $servicos = Servico::where('prestador_id', $id)->get()->toArray(); // ✅ CONVERTER PARA ARRAY
+                $categorias = $prestador->categorias()->get()->toArray(); // ✅ CONVERTER PARA ARRAY
                 $avaliacoes = Avaliacao::where('prestador_id', $id)
                     ->with('cliente')
                     ->orderBy('created_at', 'desc')
-                    ->get();
+                    ->get()
+                    ->toArray(); // ✅ CONVERTER PARA ARRAY
 
                 return [
                     'id' => $prestador->id,
@@ -660,7 +662,7 @@ class PrestadorController extends Controller
     }
 
     /**
-     * Prestadores em destaque (público)
+     * Prestadores em destaque (público) - ✅ CORRIGIDO COM TOARRAY
      * GET /api/prestadores/destaque
      */
     public function destaque()
@@ -670,7 +672,8 @@ class PrestadorController extends Controller
                 ->where('ativo', true)
                 ->orderBy('media_avaliacao', 'desc')
                 ->limit(10)
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -680,7 +683,7 @@ class PrestadorController extends Controller
     }
 
     /**
-     * Prestadores mais bem avaliados (público)
+     * Prestadores mais bem avaliados (público) - ✅ CORRIGIDO COM TOARRAY
      * GET /api/prestadores/top
      */
     public function topAvaliados()
@@ -690,7 +693,8 @@ class PrestadorController extends Controller
                 ->where('ativo', true)
                 ->orderBy('media_avaliacao', 'desc')
                 ->limit(10)
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -715,13 +719,13 @@ class PrestadorController extends Controller
     }
 
     /**
-     * Listar categorias (público)
+     * Listar categorias (público) - ✅ CORRIGIDO COM TOARRAY
      * GET /api/prestadores/categorias
      */
     public function categorias()
     {
         $categorias = Cache::remember('categorias_publicas', 3600, function () {
-            return Categoria::where('ativo', true)->get();
+            return Categoria::where('ativo', true)->get()->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -803,7 +807,8 @@ class PrestadorController extends Controller
             return Transacao::where('user_id', $user->id)
                 ->where('tipo', 'saque')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -946,7 +951,8 @@ class PrestadorController extends Controller
                         'valor' => $pedido->valor,
                         'observacoes' => $pedido->observacoes,
                     ];
-                });
+                })
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -983,7 +989,8 @@ class PrestadorController extends Controller
                             'foto' => $avaliacao->cliente->foto ? asset('storage/' . $avaliacao->cliente->foto) : null,
                         ],
                     ];
-                });
+                })
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -1008,7 +1015,8 @@ class PrestadorController extends Controller
         $intervalos = Cache::remember($cacheKey, 300, function () use ($user) {
             return PrestadorIntervalo::where('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([

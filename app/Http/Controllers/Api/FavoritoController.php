@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Cache;
 class FavoritoController extends Controller
 {
     /**
-     * Listar favoritos do cliente - COM CACHE
+     * Listar favoritos do cliente - COM CACHE E TOARRAY
      * GET /api/cliente/favoritos
      */
     public function index(Request $request)
@@ -23,7 +23,23 @@ class FavoritoController extends Controller
             return Favorito::where('cliente_id', $user->id)
                 ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao,ativo')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->map(function ($favorito) {
+                    return [
+                        'id' => (int) $favorito->id,
+                        'created_at' => $favorito->created_at ? $favorito->created_at->toISOString() : null,
+                        'prestador' => $favorito->prestador ? [
+                            'id' => (int) $favorito->prestador->id,
+                            'nome' => (string) $favorito->prestador->nome,
+                            'foto' => $favorito->prestador->foto ? asset('storage/' . $favorito->prestador->foto) : null,
+                            'telefone' => (string) $favorito->prestador->telefone,
+                            'media_avaliacao' => (float) ($favorito->prestador->media_avaliacao ?? 0),
+                            'profissao' => (string) ($favorito->prestador->profissao ?? 'Profissional'),
+                            'ativo' => (bool) $favorito->prestador->ativo,
+                        ] : null
+                    ];
+                })
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -33,7 +49,7 @@ class FavoritoController extends Controller
     }
 
     /**
-     * Adicionar prestador aos favoritos - LIMPAR CACHE
+     * Adicionar prestador aos favoritos - LIMPAR CACHE E RETORNAR ARRAY
      * POST /api/cliente/favoritos/{prestadorId}
      */
     public function store(Request $request, $prestadorId)
@@ -67,18 +83,34 @@ class FavoritoController extends Controller
                 'prestador_id' => $prestadorId,
             ]);
 
+            // ✅ CARREGAR RELACIONAMENTO
+            $favorito->load('prestador:id,nome,foto,telefone,media_avaliacao,profissao,ativo');
+
             // Limpar cache
             $this->clearFavoritoCache($user->id);
 
+            // ✅ CONVERTER PARA ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Prestador adicionado aos favoritos',
-                'data' => $favorito
+                'data' => [
+                    'id' => (int) $favorito->id,
+                    'created_at' => $favorito->created_at ? $favorito->created_at->toISOString() : null,
+                    'prestador' => $favorito->prestador ? [
+                        'id' => (int) $favorito->prestador->id,
+                        'nome' => (string) $favorito->prestador->nome,
+                        'foto' => $favorito->prestador->foto ? asset('storage/' . $favorito->prestador->foto) : null,
+                        'telefone' => (string) $favorito->prestador->telefone,
+                        'media_avaliacao' => (float) ($favorito->prestador->media_avaliacao ?? 0),
+                        'profissao' => (string) ($favorito->prestador->profissao ?? 'Profissional'),
+                        'ativo' => (bool) $favorito->prestador->ativo,
+                    ] : null
+                ]
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao adicionar favorito'
+                'error' => 'Erro ao adicionar favorito: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -130,7 +162,7 @@ class FavoritoController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => ['is_favorito' => $isFavorito]
+            'data' => ['is_favorito' => (bool) $isFavorito]
         ]);
     }
 
@@ -140,8 +172,15 @@ class FavoritoController extends Controller
     private function clearFavoritoCache($userId)
     {
         Cache::forget("cliente_favoritos_{$userId}");
-
-        // Limpar cache de dashboard
         Cache::forget("dashboard_{$userId}");
+
+        // Limpar caches de verificação de favoritos (padrão)
+        // Usando padrão para limpar caches relacionados
+        $keys = Cache::get("cliente_favorito_keys_{$userId}");
+        if ($keys && is_array($keys)) {
+            foreach ($keys as $key) {
+                Cache::forget($key);
+            }
+        }
     }
 }

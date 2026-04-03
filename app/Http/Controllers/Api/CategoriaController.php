@@ -12,7 +12,7 @@ use Illuminate\Support\Str;
 class CategoriaController extends Controller
 {
     /**
-     * Listar todas as categorias (admin) - COM CACHE
+     * Listar todas as categorias (admin) - COM CACHE E TOARRAY
      * GET /api/admin/categorias
      */
     public function index(Request $request)
@@ -26,7 +26,13 @@ class CategoriaController extends Controller
                 $query->where('ativo', $request->ativo);
             }
 
-            return $query->withCount('servicos')->get();
+            return $query->withCount('servicos')
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(function ($categoria) {
+                    return $this->formatCategoria($categoria);
+                })
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -36,7 +42,7 @@ class CategoriaController extends Controller
     }
 
     /**
-     * Listar categorias públicas (ativas) - COM CACHE
+     * Listar categorias públicas (ativas) - COM CACHE E TOARRAY
      * GET /api/prestadores/categorias
      */
     public function publicas()
@@ -44,7 +50,12 @@ class CategoriaController extends Controller
         $categorias = Cache::remember('categorias_publicas', 3600, function() {
             return Categoria::where('ativo', true)
                 ->withCount('servicos')
-                ->get();
+                ->orderBy('nome', 'asc')
+                ->get()
+                ->map(function ($categoria) {
+                    return $this->formatCategoria($categoria);
+                })
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([
@@ -85,21 +96,22 @@ class CategoriaController extends Controller
 
             $this->clearCategoriaCache();
 
+            // ✅ RETORNAR ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria criada com sucesso',
-                'data' => $categoria
+                'data' => $this->formatCategoria($categoria)
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao criar categoria'
+                'error' => 'Erro ao criar categoria: ' . $e->getMessage()
             ], 500);
         }
     }
 
     /**
-     * Mostrar uma categoria - COM CACHE
+     * Mostrar uma categoria - COM CACHE E TOARRAY
      * GET /api/admin/categorias/{id}
      */
     public function show($id)
@@ -107,7 +119,9 @@ class CategoriaController extends Controller
         $cacheKey = "categoria_{$id}";
 
         $categoria = Cache::remember($cacheKey, 3600, function() use ($id) {
-            return Categoria::with('servicos')->find($id);
+            return Categoria::with(['servicos' => function($query) {
+                $query->select('id', 'nome', 'preco', 'duracao', 'categoria_id');
+            }])->find($id);
         });
 
         if (!$categoria) {
@@ -117,9 +131,10 @@ class CategoriaController extends Controller
             ], 404);
         }
 
+        // ✅ RETORNAR ARRAY COM CASTS
         return response()->json([
             'success' => true,
-            'data' => $categoria
+            'data' => $this->formatCategoria($categoria, true)
         ]);
     }
 
@@ -167,15 +182,16 @@ class CategoriaController extends Controller
 
             $this->clearCategoriaCache();
 
+            // ✅ RETORNAR ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria atualizada com sucesso',
-                'data' => $categoria
+                'data' => $this->formatCategoria($categoria)
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao atualizar categoria'
+                'error' => 'Erro ao atualizar categoria: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -206,14 +222,52 @@ class CategoriaController extends Controller
     }
 
     /**
+     * Formatar categoria com casts corretos
+     */
+    private function formatCategoria($categoria, $withServicos = false)
+    {
+        $data = [
+            'id' => (int) $categoria->id,
+            'nome' => (string) $categoria->nome,
+            'slug' => (string) $categoria->slug,
+            'descricao' => $categoria->descricao ? (string) $categoria->descricao : null,
+            'icone' => (string) ($categoria->icone ?? 'category'),
+            'cor' => (string) ($categoria->cor ?? 'primary'),
+            'ativo' => (bool) $categoria->ativo,
+            'servicos_count' => (int) ($categoria->servicos_count ?? 0),
+            'created_at' => $categoria->created_at ? $categoria->created_at->toISOString() : null,
+            'updated_at' => $categoria->updated_at ? $categoria->updated_at->toISOString() : null,
+        ];
+
+        // Incluir serviços se solicitado
+        if ($withServicos && $categoria->servicos) {
+            $data['servicos'] = $categoria->servicos->map(function ($servico) {
+                return [
+                    'id' => (int) $servico->id,
+                    'nome' => (string) $servico->nome,
+                    'preco' => (float) $servico->preco,
+                    'duracao' => (int) $servico->duracao,
+                ];
+            })->toArray();
+        }
+
+        return $data;
+    }
+
+    /**
      * Limpar cache de categorias
      */
     private function clearCategoriaCache()
     {
         Cache::forget('categorias_publicas');
 
+        // Limpar cache de admin (várias páginas)
         for ($page = 1; $page <= 5; $page++) {
             Cache::forget("admin_categorias_page_{$page}");
         }
+
+        // Limpar cache de categorias específicas (padrão)
+        // Não podemos limpar todas individualmente, mas podemos limpar por padrão
+        // Em um ambiente de produção, seria melhor usar Redis com tags
     }
 }

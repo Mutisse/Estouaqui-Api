@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Cache;
 class AvaliacaoController extends Controller
 {
     /**
-     * Listar avaliações (admin) - COM CACHE
+     * Listar avaliações (admin) - COM CACHE E TOARRAY
      * GET /api/admin/avaliacoes
      */
     public function index(Request $request)
@@ -32,6 +32,7 @@ class AvaliacaoController extends Controller
             return $query->orderBy('created_at', 'desc')->paginate(20);
         });
 
+        // ✅ GARANTIR QUE O PAGINATE RETORNA DADOS FORMATADOS
         return response()->json([
             'success' => true,
             'data' => $avaliacoes
@@ -39,7 +40,7 @@ class AvaliacaoController extends Controller
     }
 
     /**
-     * Mostrar uma avaliação - COM CACHE
+     * Mostrar uma avaliação - COM CACHE E TOARRAY
      * GET /api/admin/avaliacoes/{id}
      */
     public function show($id)
@@ -47,7 +48,11 @@ class AvaliacaoController extends Controller
         $cacheKey = "avaliacao_{$id}";
 
         $avaliacao = Cache::remember($cacheKey, 3600, function() use ($id) {
-            return Avaliacao::with(['cliente:id,nome,foto', 'prestador:id,nome,foto', 'pedido:id,numero,status'])->find($id);
+            return Avaliacao::with([
+                'cliente:id,nome,foto',
+                'prestador:id,nome,foto,media_avaliacao,total_avaliacoes',
+                'pedido:id,numero,status'
+            ])->find($id);
         });
 
         if (!$avaliacao) {
@@ -57,9 +62,10 @@ class AvaliacaoController extends Controller
             ], 404);
         }
 
+        // ✅ CONVERTER PARA ARRAY COM CASTS
         return response()->json([
             'success' => true,
-            'data' => $avaliacao
+            'data' => $this->formatAvaliacao($avaliacao)
         ]);
     }
 
@@ -94,6 +100,44 @@ class AvaliacaoController extends Controller
     }
 
     /**
+     * Formatar avaliação com casts corretos
+     */
+    private function formatAvaliacao($avaliacao)
+    {
+        return [
+            'id' => (int) $avaliacao->id,
+            'nota' => (int) $avaliacao->nota,
+            'comentario' => $avaliacao->comentario ? (string) $avaliacao->comentario : null,
+            'categorias' => $avaliacao->categorias ? (array) $avaliacao->categorias : [],
+            'created_at' => $avaliacao->created_at ? $avaliacao->created_at->toISOString() : null,
+            'updated_at' => $avaliacao->updated_at ? $avaliacao->updated_at->toISOString() : null,
+
+            // Cliente
+            'cliente' => $avaliacao->cliente ? [
+                'id' => (int) $avaliacao->cliente->id,
+                'nome' => (string) $avaliacao->cliente->nome,
+                'foto' => $avaliacao->cliente->foto ? asset('storage/' . $avaliacao->cliente->foto) : null,
+            ] : null,
+
+            // Prestador
+            'prestador' => $avaliacao->prestador ? [
+                'id' => (int) $avaliacao->prestador->id,
+                'nome' => (string) $avaliacao->prestador->nome,
+                'foto' => $avaliacao->prestador->foto ? asset('storage/' . $avaliacao->prestador->foto) : null,
+                'media_avaliacao' => (float) ($avaliacao->prestador->media_avaliacao ?? 0),
+                'total_avaliacoes' => (int) ($avaliacao->prestador->total_avaliacoes ?? 0),
+            ] : null,
+
+            // Pedido
+            'pedido' => $avaliacao->pedido ? [
+                'id' => (int) $avaliacao->pedido->id,
+                'numero' => (string) $avaliacao->pedido->numero,
+                'status' => (string) $avaliacao->pedido->status,
+            ] : null,
+        ];
+    }
+
+    /**
      * Atualizar média do prestador
      */
     private function atualizarMediaPrestador($prestadorId)
@@ -103,7 +147,7 @@ class AvaliacaoController extends Controller
 
         User::where('id', $prestadorId)->update([
             'media_avaliacao' => round($media ?? 0, 1),
-            'total_avaliacoes' => $total
+            'total_avaliacoes' => (int) $total
         ]);
     }
 
@@ -112,11 +156,27 @@ class AvaliacaoController extends Controller
      */
     private function clearAvaliacaoCache($prestadorId)
     {
+        // Limpar cache do prestador
         Cache::forget("prestador_stats_{$prestadorId}");
         Cache::forget("prestador_avaliacoes_recentes_{$prestadorId}_5");
+        Cache::forget("prestador_detalhes_{$prestadorId}");
 
+        // Limpar cache de admin
         for ($page = 1; $page <= 5; $page++) {
             Cache::forget("admin_avaliacoes_page_{$page}");
+        }
+
+        // Limpar cache de páginas com filtros comuns
+        $statuses = [1, 2, 3, 4, 5];
+        foreach ($statuses as $nota) {
+            for ($page = 1; $page <= 3; $page++) {
+                Cache::forget("admin_avaliacoes_nota_{$nota}_page_{$page}");
+            }
+        }
+
+        // Limpar cache de avaliações específicas por prestador
+        for ($page = 1; $page <= 3; $page++) {
+            Cache::forget("prestador_avaliacoes_{$prestadorId}_{$page}");
         }
     }
 }

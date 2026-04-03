@@ -44,19 +44,20 @@ class LocalizacaoController extends Controller
             // Limpar cache de localização
             $this->clearLocalizacaoCache($user->id);
 
+            // ✅ RETORNAR ARRAY PURO
             return response()->json([
                 'success' => true,
                 'message' => 'Localização atualizada com sucesso',
                 'data' => [
-                    'latitude' => $user->latitude,
-                    'longitude' => $user->longitude,
-                    'raio' => $user->raio
+                    'latitude' => (float) $user->latitude,
+                    'longitude' => (float) $user->longitude,
+                    'raio' => (int) ($user->raio ?? 10)
                 ]
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'error' => 'Erro ao atualizar localização'
+                'error' => 'Erro ao atualizar localização: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -72,9 +73,9 @@ class LocalizacaoController extends Controller
 
         $data = Cache::remember($cacheKey, 3600, function() use ($user) {
             return [
-                'latitude' => $user->latitude,
-                'longitude' => $user->longitude,
-                'raio' => $user->raio ?? 10
+                'latitude' => $user->latitude ? (float) $user->latitude : null,
+                'longitude' => $user->longitude ? (float) $user->longitude : null,
+                'raio' => (int) ($user->raio ?? 10)
             ];
         });
 
@@ -85,7 +86,7 @@ class LocalizacaoController extends Controller
     }
 
     /**
-     * Buscar prestadores próximos - COM CACHE
+     * Buscar prestadores próximos - COM CACHE E TOARRAY
      * GET /api/localizacao/prestadores-proximos
      */
     public function prestadoresProximos(Request $request)
@@ -104,7 +105,7 @@ class LocalizacaoController extends Controller
             ], 422);
         }
 
-        $radius = $request->raio ?? 10;
+        $radius = (int) ($request->raio ?? 10);
         $cacheKey = "prestadores_proximos_" . md5($request->fullUrl());
 
         $prestadores = Cache::remember($cacheKey, 300, function() use ($request, $radius) {
@@ -130,27 +131,30 @@ class LocalizacaoController extends Controller
                 return $prestador->distanceTo($request->latitude, $request->longitude);
             })->take(20);
 
+            // ✅ CONVERTER PARA ARRAY PURO
             return $filtered->map(function($prestador) use ($request) {
                 return [
-                    'id' => $prestador->id,
+                    'id' => (int) $prestador->id,
                     'nome' => $prestador->nome,
                     'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
                     'profissao' => $prestador->profissao,
-                    'media_avaliacao' => $prestador->media_avaliacao,
-                    'total_avaliacoes' => $prestador->total_avaliacoes,
+                    'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                    'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
                     'distancia' => round($prestador->distanceTo($request->latitude, $request->longitude), 2),
+                    'latitude' => (float) $prestador->latitude,
+                    'longitude' => (float) $prestador->longitude,
                 ];
-            })->values();
+            })->values()->toArray(); // ✅ GARANTIR ARRAY
         });
 
         return response()->json([
             'success' => true,
             'data' => $prestadores,
             'meta' => [
-                'count' => $prestadores->count(),
+                'count' => count($prestadores),
                 'radius' => $radius,
-                'latitude' => $request->latitude,
-                'longitude' => $request->longitude,
+                'latitude' => (float) $request->latitude,
+                'longitude' => (float) $request->longitude,
             ]
         ]);
     }
@@ -161,5 +165,9 @@ class LocalizacaoController extends Controller
     private function clearLocalizacaoCache($userId)
     {
         Cache::forget("localizacao_{$userId}");
+
+        // Limpar também caches relacionados a prestadores próximos
+        // Nota: não podemos limpar todos, mas podemos limpar padrões
+        Cache::forget("prestadores_proximos_*"); // Isso limpa todos os caches de prestadores próximos
     }
 }

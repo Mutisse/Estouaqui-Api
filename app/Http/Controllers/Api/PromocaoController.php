@@ -9,7 +9,6 @@ use Illuminate\Support\Facades\Validator;
 
 class PromocaoController extends Controller
 {
-
     /**
      * Listar todas as promoções
      * GET /api/promocoes
@@ -20,7 +19,7 @@ class PromocaoController extends Controller
             $promocoes = Promocao::orderBy('created_at', 'desc')
                 ->limit(50)
                 ->get()
-                ->toArray(); // ← CONVERTER PARA ARRAY
+                ->toArray(); // ✅ JÁ CORRETO
 
             return response()->json([
                 'success' => true,
@@ -29,10 +28,37 @@ class PromocaoController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => $e->getMessage()
+                'message' => 'Erro ao listar promoções: ' . $e->getMessage()
             ], 500);
         }
     }
+
+    /**
+     * Listar promoções ativas
+     * GET /api/promocoes/ativas
+     */
+    public function ativas()
+    {
+        try {
+            $promocoes = Promocao::where('ativo', 1)
+                ->whereDate('validade', '>=', date('Y-m-d'))
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get()
+                ->toArray(); // ✅ JÁ CORRETO
+
+            return response()->json([
+                'success' => true,
+                'data' => $promocoes
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao listar promoções ativas: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
     /**
      * Detalhes de uma promoção
      * GET /api/promocoes/{id}
@@ -49,14 +75,29 @@ class PromocaoController extends Controller
                 ], 404);
             }
 
+            // ✅ CONVERTER PARA ARRAY COM CASTS CORRETOS
             return response()->json([
                 'success' => true,
-                'data' => $promocao
+                'data' => [
+                    'id' => (int) $promocao->id,
+                    'codigo' => $promocao->codigo,
+                    'titulo' => $promocao->titulo,
+                    'descricao' => $promocao->descricao,
+                    'tipo_desconto' => $promocao->tipo_desconto,
+                    'valor_desconto' => (float) $promocao->valor_desconto,
+                    'valor_minimo' => (float) $promocao->valor_minimo,
+                    'validade' => $promocao->validade,
+                    'ativo' => (bool) $promocao->ativo,
+                    'imagem' => $promocao->imagem,
+                    'created_at' => $promocao->created_at,
+                    'updated_at' => $promocao->updated_at,
+                    'deleted_at' => $promocao->deleted_at,
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao buscar promoção'
+                'message' => 'Erro ao buscar promoção: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -80,14 +121,29 @@ class PromocaoController extends Controller
                 ], 404);
             }
 
+            // ✅ CONVERTER PARA ARRAY COM CASTS CORRETOS
             return response()->json([
                 'success' => true,
-                'data' => $promocao
+                'data' => [
+                    'id' => (int) $promocao->id,
+                    'codigo' => $promocao->codigo,
+                    'titulo' => $promocao->titulo,
+                    'descricao' => $promocao->descricao,
+                    'tipo_desconto' => $promocao->tipo_desconto,
+                    'valor_desconto' => (float) $promocao->valor_desconto,
+                    'valor_minimo' => (float) $promocao->valor_minimo,
+                    'validade' => $promocao->validade,
+                    'ativo' => (bool) $promocao->ativo,
+                    'imagem' => $promocao->imagem,
+                    'created_at' => $promocao->created_at,
+                    'updated_at' => $promocao->updated_at,
+                    'deleted_at' => $promocao->deleted_at,
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao buscar promoção'
+                'message' => 'Erro ao buscar promoção: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -130,9 +186,9 @@ class PromocaoController extends Controller
                 ], 422);
             }
 
-            $valorPedido = $request->valor_pedido ?? 0;
+            $valorPedido = (float) ($request->valor_pedido ?? 0);
 
-            if ($valorPedido < $promocao->valor_minimo) {
+            if ($valorPedido < (float) $promocao->valor_minimo) {
                 return response()->json([
                     'success' => false,
                     'message' => "Valor mínimo do pedido: " . number_format($promocao->valor_minimo, 2) . " MZN"
@@ -141,22 +197,23 @@ class PromocaoController extends Controller
 
             // Calcular desconto
             if ($promocao->tipo_desconto === 'percentual') {
-                $desconto = ($valorPedido * $promocao->valor_desconto) / 100;
+                $desconto = ($valorPedido * (float) $promocao->valor_desconto) / 100;
             } else {
-                $desconto = $promocao->valor_desconto;
+                $desconto = (float) $promocao->valor_desconto;
             }
 
+            // ✅ JÁ ESTÁ RETORNANDO ARRAY (CORRETO)
             return response()->json([
                 'success' => true,
                 'data' => [
-                    'id' => $promocao->id,
+                    'id' => (int) $promocao->id,
                     'codigo' => $promocao->codigo,
                     'titulo' => $promocao->titulo,
                     'descricao' => $promocao->descricao,
                     'tipo_desconto' => $promocao->tipo_desconto,
-                    'valor_desconto' => $promocao->valor_desconto,
-                    'desconto_aplicado' => $desconto,
-                    'valor_minimo' => $promocao->valor_minimo,
+                    'valor_desconto' => (float) $promocao->valor_desconto,
+                    'desconto_aplicado' => round($desconto, 2),
+                    'valor_minimo' => (float) $promocao->valor_minimo,
                     'validade' => $promocao->validade,
                 ]
             ]);
@@ -199,22 +256,34 @@ class PromocaoController extends Controller
                 'titulo' => $request->titulo,
                 'descricao' => $request->descricao,
                 'tipo_desconto' => $request->tipo_desconto,
-                'valor_desconto' => $request->valor_desconto,
-                'valor_minimo' => $request->valor_minimo,
+                'valor_desconto' => (float) $request->valor_desconto,
+                'valor_minimo' => (float) $request->valor_minimo,
                 'validade' => $request->validade,
                 'ativo' => $request->ativo ?? true,
                 'imagem' => $request->imagem,
             ]);
 
+            // ✅ RETORNAR ARRAY NA CRIAÇÃO
             return response()->json([
                 'success' => true,
                 'message' => 'Promoção criada com sucesso',
-                'data' => $promocao
+                'data' => [
+                    'id' => (int) $promocao->id,
+                    'codigo' => $promocao->codigo,
+                    'titulo' => $promocao->titulo,
+                    'descricao' => $promocao->descricao,
+                    'tipo_desconto' => $promocao->tipo_desconto,
+                    'valor_desconto' => (float) $promocao->valor_desconto,
+                    'valor_minimo' => (float) $promocao->valor_minimo,
+                    'validade' => $promocao->validade,
+                    'ativo' => (bool) $promocao->ativo,
+                    'imagem' => $promocao->imagem,
+                ]
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao criar promoção'
+                'message' => 'Erro ao criar promoção: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -258,23 +327,35 @@ class PromocaoController extends Controller
             if ($request->has('titulo')) $promocao->titulo = $request->titulo;
             if ($request->has('descricao')) $promocao->descricao = $request->descricao;
             if ($request->has('tipo_desconto')) $promocao->tipo_desconto = $request->tipo_desconto;
-            if ($request->has('valor_desconto')) $promocao->valor_desconto = $request->valor_desconto;
-            if ($request->has('valor_minimo')) $promocao->valor_minimo = $request->valor_minimo;
+            if ($request->has('valor_desconto')) $promocao->valor_desconto = (float) $request->valor_desconto;
+            if ($request->has('valor_minimo')) $promocao->valor_minimo = (float) $request->valor_minimo;
             if ($request->has('validade')) $promocao->validade = $request->validade;
             if ($request->has('ativo')) $promocao->ativo = $request->ativo;
             if ($request->has('imagem')) $promocao->imagem = $request->imagem;
 
             $promocao->save();
 
+            // ✅ RETORNAR ARRAY NA ATUALIZAÇÃO
             return response()->json([
                 'success' => true,
                 'message' => 'Promoção atualizada com sucesso',
-                'data' => $promocao
+                'data' => [
+                    'id' => (int) $promocao->id,
+                    'codigo' => $promocao->codigo,
+                    'titulo' => $promocao->titulo,
+                    'descricao' => $promocao->descricao,
+                    'tipo_desconto' => $promocao->tipo_desconto,
+                    'valor_desconto' => (float) $promocao->valor_desconto,
+                    'valor_minimo' => (float) $promocao->valor_minimo,
+                    'validade' => $promocao->validade,
+                    'ativo' => (bool) $promocao->ativo,
+                    'imagem' => $promocao->imagem,
+                ]
             ]);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao atualizar promoção'
+                'message' => 'Erro ao atualizar promoção: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -304,7 +385,7 @@ class PromocaoController extends Controller
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao deletar promoção'
+                'message' => 'Erro ao deletar promoção: ' . $e->getMessage()
             ], 500);
         }
     }

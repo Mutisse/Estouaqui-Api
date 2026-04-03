@@ -80,7 +80,7 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 2. PEDIDOS DO CLIENTE (COM CACHE)
+    // 2. PEDIDOS DO CLIENTE (COM CACHE E TOARRAY)
     // ==========================================
 
     /**
@@ -230,7 +230,7 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 3. AVALIAÇÕES DO CLIENTE (COM CACHE)
+    // 3. AVALIAÇÕES DO CLIENTE (COM CACHE E TOARRAY)
     // ==========================================
 
     /**
@@ -461,7 +461,7 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 4. FAVORITOS (COM CACHE)
+    // 4. FAVORITOS (COM CACHE E TOARRAY)
     // ==========================================
 
     /**
@@ -477,7 +477,8 @@ class ClienteController extends Controller
             return Favorito::where('cliente_id', $user->id)
                 ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
                 ->orderBy('created_at', 'desc')
-                ->get();
+                ->get()
+                ->toArray(); // ✅ CONVERTER PARA ARRAY
         });
 
         return response()->json([

@@ -8,21 +8,21 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 
 /**
- * Controller exclusivo para autenticação
+ * Controller exclusivo para autenticação - VERSÃO OTIMIZADA
  * Login, Logout, Recuperação de senha
  */
 class AuthController extends Controller
 {
     /**
-     * Login do usuário - OTIMIZADO
+     * Login do usuário - OTIMIZADO (SEM CACHE PARA EVITAR TIMEOUT)
      * POST /api/login
      */
     public function login(Request $request)
     {
+        // Validação rápida
         $validator = Validator::make($request->all(), [
             'email' => 'required_without:telefone|email',
             'telefone' => 'required_without:email|string|max:20',
@@ -36,20 +36,16 @@ class AuthController extends Controller
             ], 422);
         }
 
-        // ✅ OTIMIZAÇÃO 1: Buscar apenas campos necessários
+        // Determinar campo de busca
         $field = $request->has('email') ? 'email' : 'telefone';
         $value = $field === 'email' ? $request->email : preg_replace('/\D/', '', $request->telefone);
 
-        // ✅ OTIMIZAÇÃO 2: Query com select específico e cache
-        $cacheKey = "user_login_{$field}_{$value}";
+        // ✅ Query ÚNICA - SEM CACHE (cache causa timeout)
+        $user = User::where($field, $value)
+            ->select('id', 'nome', 'email', 'telefone', 'foto', 'tipo', 'password', 'ativo', 'blocked_at')
+            ->first();
 
-        $user = Cache::remember($cacheKey, 60, function () use ($field, $value) {
-            return User::where($field, $value)
-                ->select('id', 'nome', 'email', 'telefone', 'foto', 'tipo', 'password', 'ativo', 'blocked_at')
-                ->first();
-        });
-
-        // ✅ OTIMIZAÇÃO 3: Verificação rápida de existência
+        // Verificações rápidas
         if (!$user) {
             return response()->json([
                 'success' => false,
@@ -57,7 +53,6 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // ✅ OTIMIZAÇÃO 4: Hash check otimizado
         if (!Hash::check($request->password, $user->password)) {
             return response()->json([
                 'success' => false,
@@ -65,7 +60,6 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // Verificar se conta está bloqueada
         if ($user->blocked_at) {
             return response()->json([
                 'success' => false,
@@ -73,14 +67,13 @@ class AuthController extends Controller
             ], 403);
         }
 
-        // ✅ OTIMIZAÇÃO 5: Não deletar todos os tokens - apenas limitar
-        // Remover apenas tokens antigos (mais de 30 dias)
+        // ✅ REMOVER TOKENS ANTIGOS (operação rápida)
         $user->tokens()->where('created_at', '<', now()->subDays(30))->delete();
 
-        // ✅ OTIMIZAÇÃO 6: Criar token com expiração
+        // ✅ CRIAR TOKEN (operação rápida)
         $token = $user->createToken('auth_token', ['*'], now()->addDays(7))->plainTextToken;
 
-        // ✅ OTIMIZAÇÃO 7: Cache dos dados do usuário
+        // ✅ DADOS DO USUÁRIO (APENAS ARRAY)
         $userData = [
             'id' => $user->id,
             'nome' => $user->nome,
@@ -89,8 +82,6 @@ class AuthController extends Controller
             'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
             'tipo' => $user->tipo,
         ];
-
-        Cache::put("user_data_{$user->id}", $userData, 3600);
 
         return response()->json([
             'success' => true,
@@ -108,11 +99,12 @@ class AuthController extends Controller
      */
     public function logout(Request $request)
     {
-        // Revogar o token atual
-        $request->user()->currentAccessToken()->delete();
+        $user = $request->user();
 
-        // Limpar cache do usuário
-        Cache::forget("user_data_{$request->user()->id}");
+        if ($user) {
+            // Revogar o token atual
+            $user->currentAccessToken()->delete();
+        }
 
         return response()->json([
             'success' => true,
@@ -147,7 +139,6 @@ class AuthController extends Controller
         );
 
         // TODO: Enviar email com link de reset
-        // Link: /reset-password/{token}?email={$user->email}
 
         return response()->json([
             'success' => true,
@@ -208,11 +199,6 @@ class AuthController extends Controller
         // Revogar todos os tokens do usuário
         $user->tokens()->delete();
 
-        // Limpar cache
-        Cache::forget("user_data_{$user->id}");
-        Cache::forget("user_login_email_{$user->email}");
-        Cache::forget("user_login_telefone_{$user->telefone}");
-
         return response()->json([
             'success' => true,
             'message' => 'Senha alterada com sucesso. Faça login com sua nova senha.'
@@ -234,17 +220,15 @@ class AuthController extends Controller
             ], 401);
         }
 
-        // ✅ OTIMIZAÇÃO: Buscar do cache
-        $userData = Cache::remember("user_data_{$user->id}", 3600, function () use ($user) {
-            return [
-                'id' => $user->id,
-                'nome' => $user->nome,
-                'email' => $user->email,
-                'telefone' => $user->telefone,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
-                'tipo' => $user->tipo,
-            ];
-        });
+        // ✅ Dados simples (sem cache para evitar timeout)
+        $userData = [
+            'id' => $user->id,
+            'nome' => $user->nome,
+            'email' => $user->email,
+            'telefone' => $user->telefone,
+            'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+            'tipo' => $user->tipo,
+        ];
 
         return response()->json([
             'success' => true,
