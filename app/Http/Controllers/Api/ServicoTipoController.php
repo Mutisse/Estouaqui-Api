@@ -9,16 +9,22 @@ use Illuminate\Support\Facades\Cache;
 
 class ServicoTipoController extends Controller
 {
-    /**
-     * Listar todos os tipos de serviço ativos - COM CACHE
-     * GET /api/servico-tipos
-     */
     public function index()
     {
-        $tipos = Cache::remember('servico_tipos_all', 3600, function() {
+        $tipos = Cache::remember('servico_tipos_all', 3600, function () {
             return ServicoTipo::where('ativo', true)
                 ->orderBy('ordem')
-                ->get();
+                ->get()
+                ->map(function ($tipo) {
+                    return [
+                        'id' => $tipo->id,
+                        'nome' => $tipo->nome,
+                        'slug' => $tipo->slug,
+                        'icone' => $tipo->icone,
+                        'cor' => $tipo->cor,
+                    ];
+                })
+                ->toArray(); // ✅ OBRIGATÓRIO
         });
 
         return response()->json([
@@ -27,25 +33,21 @@ class ServicoTipoController extends Controller
         ]);
     }
 
-    /**
-     * Listar opções para select - COM CACHE
-     * GET /api/servico-tipos/options
-     */
     public function options()
     {
-        $options = Cache::remember('servico_tipos_options', 3600, function() {
-            $tipos = ServicoTipo::where('ativo', true)
+        $options = Cache::remember('servico_tipos_options', 3600, function () {
+            return ServicoTipo::where('ativo', true)
                 ->orderBy('ordem')
-                ->get();
-
-            return $tipos->map(function ($tipo) {
-                return [
-                    'label' => $tipo->nome,
-                    'value' => $tipo->slug,
-                    'icone' => $tipo->icone,
-                    'cor' => $tipo->cor
-                ];
-            });
+                ->get()
+                ->map(function ($tipo) {
+                    return [
+                        'label' => $tipo->nome,
+                        'value' => $tipo->slug,
+                        'icone' => $tipo->icone,
+                        'cor' => $tipo->cor
+                    ];
+                })
+                ->toArray(); // ← CONVERTE PARA ARRAY ANTES DO CACHE
         });
 
         return response()->json([

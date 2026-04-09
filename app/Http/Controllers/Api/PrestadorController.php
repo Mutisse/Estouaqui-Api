@@ -573,6 +573,14 @@ class PrestadorController extends Controller
      * Listar prestadores (público)
      * GET /api/prestadores
      */
+    /**
+     * Listar prestadores (público)
+     * GET /api/prestadores
+     */
+    /**
+     * Listar prestadores (público)
+     * GET /api/prestadores
+     */
     public function index(Request $request)
     {
         $cacheKey = "prestadores_list_" . md5($request->fullUrl());
@@ -592,7 +600,28 @@ class PrestadorController extends Controller
                 $query->where('nome', 'like', '%' . $request->busca . '%');
             }
 
-            return $query->paginate(20);
+            // ✅ CORREÇÃO: Usar get() e toArray() para evitar problema de serialização
+            return $query->get()->map(function ($prestador) {
+                return [
+                    'id' => (int) $prestador->id,
+                    'nome' => (string) $prestador->nome,
+                    'email' => (string) $prestador->email,
+                    'telefone' => (string) $prestador->telefone,
+                    'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                    'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
+                    'sobre' => $prestador->sobre ? (string) $prestador->sobre : null,
+                    'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                    'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                    'verificado' => (bool) ($prestador->verificado ?? false),
+                    'disponivel' => (bool) ($prestador->ativo ?? true),
+                    'categorias' => $prestador->categorias->map(function ($cat) {
+                        return [
+                            'id' => (int) $cat->id,
+                            'nome' => (string) $cat->nome,
+                        ];
+                    })->toArray(),
+                ];
+            })->toArray();
         });
 
         return response()->json([
@@ -600,7 +629,6 @@ class PrestadorController extends Controller
             'data' => $prestadores
         ]);
     }
-
     /**
      * Detalhes do prestador (público)
      * GET /api/prestadores/{id}
@@ -722,10 +750,30 @@ class PrestadorController extends Controller
      * Listar categorias (público) - ✅ CORRIGIDO COM TOARRAY
      * GET /api/prestadores/categorias
      */
+    /**
+     * Listar categorias públicas (via PrestadorController)
+     * GET /api/prestadores/categorias
+     */
     public function categorias()
     {
-        $categorias = Cache::remember('categorias_publicas', 3600, function () {
-            return Categoria::where('ativo', true)->get()->toArray(); // ✅ CONVERTER PARA ARRAY
+        $categorias = Cache::remember('prestador_categorias_publicas', 3600, function () {
+            return Categoria::where('ativo', true)
+                ->select('id', 'nome', 'slug', 'icone', 'cor', 'descricao')
+                ->orderBy('nome', 'asc')
+                ->get()
+                ->map(function ($categoria) {
+                    return [
+                        'id' => (int) $categoria->id,
+                        'nome' => (string) $categoria->nome,
+                        'slug' => (string) $categoria->slug,
+                        'icone' => (string) ($categoria->icone ?? 'category'),
+                        'cor' => (string) ($categoria->cor ?? 'primary'),
+                        'descricao' => $categoria->descricao ? (string) $categoria->descricao : null,
+                        'ativo' => (bool) $categoria->ativo,
+                        'servicos_count' => (int) ($categoria->servicos_count ?? 0),
+                    ];
+                })
+                ->toArray();
         });
 
         return response()->json([
