@@ -18,11 +18,12 @@ class PedidoController extends Controller
     {
         $cacheKey = 'admin_pedidos_' . md5($request->fullUrl());
 
-        $pedidos = Cache::remember($cacheKey, 120, function() use ($request) {
+        $pedidos = Cache::remember($cacheKey, 120, function () use ($request) {
             $query = Pedido::with([
                 'cliente:id,nome,foto,telefone',
                 'prestador:id,nome,foto,telefone',
-                'servico:id,nome,preco,duracao'
+                'servico:id,nome,preco,duracao',
+                'categoria:id,nome,icone,cor'  // ✅ ADICIONADO
             ]);
 
             if ($request->has('status')) {
@@ -40,7 +41,6 @@ class PedidoController extends Controller
             return $query->orderBy('created_at', 'desc')->paginate(20);
         });
 
-        // ✅ GARANTIR QUE O PAGINATE RETORNA ARRAY COM CASTS
         return response()->json([
             'success' => true,
             'data' => $pedidos
@@ -55,11 +55,12 @@ class PedidoController extends Controller
     {
         $cacheKey = "pedido_detalhes_{$id}";
 
-        $pedido = Cache::remember($cacheKey, 300, function() use ($id) {
+        $pedido = Cache::remember($cacheKey, 300, function () use ($id) {
             return Pedido::with([
                 'cliente:id,nome,foto,telefone',
                 'prestador:id,nome,foto,telefone,media_avaliacao',
                 'servico:id,nome,preco,duracao',
+                'categoria:id,nome,icone,cor',  // ✅ ADICIONADO
                 'avaliacao'
             ])->find($id);
         });
@@ -71,10 +72,89 @@ class PedidoController extends Controller
             ], 404);
         }
 
-        // ✅ CONVERTER OBJETO PARA ARRAY COM CASTS MANUAIS
         return response()->json([
             'success' => true,
             'data' => $this->formatPedido($pedido)
+        ]);
+    }
+
+    /**
+     * Cliente criar novo pedido (NOVO MÉTODO)
+     * POST /api/cliente/pedidos
+     */
+    public function createPedido(Request $request)
+    {
+        $cliente = $request->user();
+
+        $validator = Validator::make($request->all(), [
+            'categoria_id' => 'required|exists:categorias,id',
+            'descricao' => 'required|string|max:1000',
+            'foto' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
+            'endereco' => 'required|string|max:255',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'message' => $validator->errors()->first()
+            ], 422);
+        }
+
+        try {
+            $fotoPath = null;
+            if ($request->hasFile('foto')) {
+                $fotoPath = $request->file('foto')->store('pedidos', 'public');
+            }
+
+            $pedido = Pedido::create([
+                'numero' => 'PED-' . strtoupper(uniqid()),
+                'cliente_id' => $cliente->id,
+                'categoria_id' => $request->categoria_id,
+                'descricao' => $request->descricao,
+                'foto' => $fotoPath,
+                'endereco' => $request->endereco,
+                'status' => 'aberto',  // ✅ NOVO STATUS
+                'prestador_id' => null,  // ✅ NULL até aceitar proposta
+                'servico_id' => null,    // ✅ NULL (não usa serviço pré-definido)
+                'valor' => null,         // ✅ NULL até aceitar proposta
+            ]);
+
+            // Limpar cache
+            $this->clearPedidoCache($pedido->id, $cliente->id, null);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pedido publicado com sucesso!',
+                'data' => $this->formatPedido($pedido)
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao criar pedido: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Cliente listar seus pedidos
+     * GET /api/cliente/pedidos
+     */
+    public function meusPedidos(Request $request)
+    {
+        $cliente = $request->user();
+
+        $pedidos = Pedido::where('cliente_id', $cliente->id)
+            ->with(['categoria', 'prestador' => function ($q) {
+                $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao');
+            }])
+            ->orderBy('created_at', 'desc')
+            ->get();
+
+        return response()->json([
+            'success' => true,
+            'data' => $pedidos->map(function ($pedido) {
+                return $this->formatPedido($pedido);
+            })
         ]);
     }
 
@@ -94,7 +174,7 @@ class PedidoController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'status' => 'required|in:pendente,aceito,em_andamento,concluido,cancelado'
+            'status' => 'required|in:aberto,pendente,aceito,em_andamento,concluido,cancelado'
         ]);
 
         if ($validator->fails()) {
@@ -110,11 +190,11 @@ class PedidoController extends Controller
 
             $this->clearPedidoCache($id, $pedido->cliente_id, $pedido->prestador_id);
 
-            // ✅ RECARREGAR RELACIONAMENTOS APÓS ATUALIZAÇÃO
             $pedido->load([
                 'cliente:id,nome,foto,telefone',
                 'prestador:id,nome,foto,telefone,media_avaliacao',
                 'servico:id,nome,preco,duracao',
+                'categoria:id,nome,icone,cor',
                 'avaliacao'
             ]);
 
@@ -165,7 +245,7 @@ class PedidoController extends Controller
     }
 
     /**
-     * Formatar pedido com casts corretos
+     * Formatar pedido com casts corretos (ATUALIZADO)
      */
     private function formatPedido($pedido)
     {
@@ -173,12 +253,22 @@ class PedidoController extends Controller
             'id' => (int) $pedido->id,
             'numero' => (string) $pedido->numero,
             'status' => (string) $pedido->status,
+            'descricao' => $pedido->descricao ? (string) $pedido->descricao : null,  // ✅ NOVO
+            'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,      // ✅ NOVO
             'data' => $pedido->data ? $pedido->data->toISOString() : null,
             'endereco' => (string) $pedido->endereco,
             'observacoes' => $pedido->observacoes ? (string) $pedido->observacoes : null,
-            'valor' => (float) $pedido->valor,
+            'valor' => $pedido->valor ? (float) $pedido->valor : null,  // ✅ PODE SER NULL
             'created_at' => $pedido->created_at ? $pedido->created_at->toISOString() : null,
             'updated_at' => $pedido->updated_at ? $pedido->updated_at->toISOString() : null,
+
+            // ✅ NOVO - Categoria
+            'categoria' => $pedido->categoria ? [
+                'id' => (int) $pedido->categoria->id,
+                'nome' => (string) $pedido->categoria->nome,
+                'icone' => (string) $pedido->categoria->icone,
+                'cor' => (string) $pedido->categoria->cor,
+            ] : null,
 
             // Relacionamentos
             'cliente' => $pedido->cliente ? [
@@ -213,7 +303,7 @@ class PedidoController extends Controller
     }
 
     /**
-     * Limpar cache do pedido
+     * Limpar cache do pedido (ATUALIZADO)
      */
     private function clearPedidoCache($pedidoId, $clienteId, $prestadorId)
     {
@@ -223,7 +313,7 @@ class PedidoController extends Controller
         // Limpar cache de admin
         for ($page = 1; $page <= 5; $page++) {
             Cache::forget("admin_pedidos_page_{$page}");
-            $statuses = ['pendente', 'aceito', 'em_andamento', 'concluido', 'cancelado'];
+            $statuses = ['aberto', 'pendente', 'aceito', 'em_andamento', 'concluido', 'cancelado'];
             foreach ($statuses as $status) {
                 Cache::forget("admin_pedidos_status_{$status}_page_{$page}");
             }
@@ -231,7 +321,7 @@ class PedidoController extends Controller
 
         // Limpar cache do cliente
         if ($clienteId) {
-            $statuses = ['pendente', 'aceito', 'concluido', 'cancelado', null];
+            $statuses = ['aberto', 'pendente', 'aceito', 'concluido', 'cancelado', null];
             foreach ($statuses as $status) {
                 for ($page = 1; $page <= 5; $page++) {
                     $statusKey = $status ?: 'all';
@@ -242,7 +332,7 @@ class PedidoController extends Controller
 
         // Limpar cache do prestador
         if ($prestadorId) {
-            $statuses = ['pendente', 'aceito', 'concluido', 'cancelado', null];
+            $statuses = ['aberto', 'pendente', 'aceito', 'concluido', 'cancelado', null];
             foreach ($statuses as $status) {
                 for ($page = 1; $page <= 5; $page++) {
                     $statusKey = $status ?: 'all';

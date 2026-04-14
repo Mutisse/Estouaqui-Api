@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\LocalizacaoController;
 use App\Http\Controllers\Api\ServicoTipoController;
 use App\Http\Controllers\Api\RaioOpcaoController;
 use App\Http\Controllers\Api\SystemMonitorController;
+use App\Http\Controllers\Api\PropostaController;
 
 /*
 |--------------------------------------------------------------------------
@@ -97,19 +98,11 @@ Route::prefix('auxiliar')->group(function () {
 // 8. ROTAS PÚBLICAS - DADOS AUXILIARES
 // ==========================================
 Route::prefix('public')->group(function () {
-
-    // Tipos de serviço
     Route::get('/servico-tipos', [ServicoTipoController::class, 'index']);
     Route::get('/servico-tipos/options', [ServicoTipoController::class, 'options']);
-
-    // Opções de raio
     Route::get('/raio-opcoes', [RaioOpcaoController::class, 'index']);
     Route::get('/raio-opcoes/options', [RaioOpcaoController::class, 'options']);
-
-    // Categorias públicas
     Route::get('/categorias', [CategoriaController::class, 'publicas']);
-
-    // Promoções ativas (públicas)
     Route::get('/promocoes/ativas', [PromocaoController::class, 'publicAtivas']);
 });
 
@@ -217,12 +210,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     Route::middleware('role:cliente')->prefix('cliente')->group(function () {
 
-        // Pedidos
+        // Pedidos - NOVAS ROTAS
         Route::prefix('pedidos')->group(function () {
-            Route::get('/', [ClienteController::class, 'pedidos']);
-            Route::get('/{id}', [ClienteController::class, 'showPedido']);
-            Route::post('/', [ClienteController::class, 'createPedido']);
-            Route::put('/{id}/cancelar', [ClienteController::class, 'cancelarPedido']);
+            Route::post('/', [PedidoController::class, 'createPedido']);        // ✅ Criar pedido
+            Route::get('/', [PedidoController::class, 'meusPedidos']);          // ✅ Listar meus pedidos
+            Route::get('/{id}', [PedidoController::class, 'showPedido']);       // ✅ Detalhes do pedido
+            Route::put('/{id}/cancelar', [PedidoController::class, 'cancelarPedido']); // ✅ Cancelar pedido
         });
 
         // Avaliações
@@ -242,6 +235,11 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{prestadorId}', [FavoritoController::class, 'destroy']);
             Route::get('/{prestadorId}/check', [FavoritoController::class, 'check']);
         });
+
+        // ✅ PROPOSTAS DO CLIENTE
+        Route::get('/propostas', [PropostaController::class, 'minhasPropostasCliente']);
+        Route::put('/propostas/{id}/aceitar', [PropostaController::class, 'aceitar']);
+        Route::put('/propostas/{id}/recusar', [PropostaController::class, 'recusar']);
     });
 
     // ==========================================
@@ -302,6 +300,11 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/avaliacoes/recentes', [PrestadorController::class, 'avaliacoesRecentes']);
         Route::get('/stats', [PrestadorController::class, 'stats']);
         Route::post('/clear-cache', [PrestadorController::class, 'clearCache']);
+
+        // ✅ PROPOSTAS DO PRESTADOR
+        Route::post('/propostas', [PropostaController::class, 'store']);
+        Route::get('/propostas', [PropostaController::class, 'minhasPropostasPrestador']);
+        Route::get('/pedidos-disponiveis', [PropostaController::class, 'pedidosDisponiveis']);
     });
 
     // ==========================================
