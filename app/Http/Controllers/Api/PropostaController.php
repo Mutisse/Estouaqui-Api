@@ -16,6 +16,10 @@ class PropostaController extends Controller
      * Prestador envia proposta para um pedido
      * POST /api/prestador/propostas
      */
+    /**
+     * Prestador envia proposta para um pedido
+     * POST /api/prestador/propostas
+     */
     public function store(Request $request)
     {
         $prestador = $request->user();
@@ -43,8 +47,8 @@ class PropostaController extends Controller
 
         $pedido = Pedido::find($request->pedido_id);
 
-        // Verificar se o pedido está aberto
-        if ($pedido->status !== 'aberto') {
+        // ✅ CORRIGIDO: Verificar se o pedido está pendente (não 'aberto')
+        if ($pedido->status !== 'pendente') {
             return response()->json([
                 'success' => false,
                 'message' => 'Este pedido já não está disponível'
