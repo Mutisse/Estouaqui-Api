@@ -7,15 +7,18 @@ use App\Models\Pedido;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class PedidoController extends Controller
 {
     /**
-     * Listar pedidos (admin) - ✅ RETORNA ARRAY COM CASTS
+     * Listar pedidos (admin)
      * GET /api/admin/pedidos
      */
     public function index(Request $request)
     {
+        Log::info('🔵 PedidoController@index - INICIADO');
+
         $cacheKey = 'admin_pedidos_' . md5($request->fullUrl());
 
         $pedidos = Cache::remember($cacheKey, 120, function () use ($request) {
@@ -23,7 +26,7 @@ class PedidoController extends Controller
                 'cliente:id,nome,foto,telefone',
                 'prestador:id,nome,foto,telefone',
                 'servico:id,nome,preco,duracao',
-                'categoria:id,nome,icone,cor'  // ✅ ADICIONADO
+                'categoria:id,nome,icone,cor'
             ]);
 
             if ($request->has('status')) {
@@ -41,6 +44,8 @@ class PedidoController extends Controller
             return $query->orderBy('created_at', 'desc')->paginate(20);
         });
 
+        Log::info('✅ PedidoController@index - FINALIZADO');
+
         return response()->json([
             'success' => true,
             'data' => $pedidos
@@ -48,11 +53,13 @@ class PedidoController extends Controller
     }
 
     /**
-     * Mostrar um pedido - ✅ RETORNA ARRAY COM CASTS
+     * Mostrar um pedido
      * GET /api/admin/pedidos/{id}
      */
     public function show($id)
     {
+        Log::info('🔵 PedidoController@show - ID: ' . $id);
+
         $cacheKey = "pedido_detalhes_{$id}";
 
         $pedido = Cache::remember($cacheKey, 300, function () use ($id) {
@@ -60,17 +67,20 @@ class PedidoController extends Controller
                 'cliente:id,nome,foto,telefone',
                 'prestador:id,nome,foto,telefone,media_avaliacao',
                 'servico:id,nome,preco,duracao',
-                'categoria:id,nome,icone,cor',  // ✅ ADICIONADO
+                'categoria:id,nome,icone,cor',
                 'avaliacao'
             ])->find($id);
         });
 
         if (!$pedido) {
+            Log::warning('⚠️ Pedido não encontrado - ID: ' . $id);
             return response()->json([
                 'success' => false,
                 'error' => 'Pedido não encontrado'
             ], 404);
         }
+
+        Log::info('✅ PedidoController@show - FINALIZADO');
 
         return response()->json([
             'success' => true,
@@ -79,55 +89,89 @@ class PedidoController extends Controller
     }
 
     /**
-     * Cliente criar novo pedido (NOVO MÉTODO)
+     * Cliente criar novo pedido
+     * POST /api/cliente/pedidos
+     */
+    /**
+     * Cliente criar novo pedido
+     * POST /api/cliente/pedidos
+     */
+    /**
+     * Cliente criar novo pedido
      * POST /api/cliente/pedidos
      */
     public function createPedido(Request $request)
     {
-        $cliente = $request->user();
-
-        $validator = Validator::make($request->all(), [
-            'categoria_id' => 'required|exists:categorias,id',
-            'descricao' => 'required|string|max:1000',
-            'foto' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
-            'endereco' => 'required|string|max:255',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => $validator->errors()->first()
-            ], 422);
-        }
+        Log::info('🔵🔵🔵 PedidoController@createPedido - INICIADO 🔵🔵🔵');
 
         try {
+            $cliente = $request->user();
+
+            if (!$cliente) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuário não autenticado'
+                ], 401);
+            }
+
+            // PEGAR TODOS OS DADOS DO FormData
+            $categoria_id = $request->post('categoria_id');
+            $descricao = $request->post('descricao');
+            $endereco = $request->post('endereco');
+
+            Log::info('📌 categoria_id: ' . $categoria_id);
+            Log::info('📌 descricao: ' . $descricao);
+            Log::info('📌 endereco: ' . $endereco);
+
+            // VALIDAÇÃO
+            if (!$categoria_id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Categoria é obrigatória'
+                ], 422);
+            }
+
+            if (!$descricao) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Descrição é obrigatória'
+                ], 422);
+            }
+
+            if (!$endereco) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Endereço é obrigatório'
+                ], 422);
+            }
+
+            // FOTO
             $fotoPath = null;
             if ($request->hasFile('foto')) {
                 $fotoPath = $request->file('foto')->store('pedidos', 'public');
             }
 
+            // CRIAR PEDIDO
             $pedido = Pedido::create([
-                'numero' => 'PED-' . strtoupper(uniqid()),
                 'cliente_id' => $cliente->id,
-                'categoria_id' => $request->categoria_id,
-                'descricao' => $request->descricao,
+                'categoria_id' => $categoria_id,
+                'descricao' => $descricao,
                 'foto' => $fotoPath,
-                'endereco' => $request->endereco,
-                'status' => 'aberto',  // ✅ NOVO STATUS
-                'prestador_id' => null,  // ✅ NULL até aceitar proposta
-                'servico_id' => null,    // ✅ NULL (não usa serviço pré-definido)
-                'valor' => null,         // ✅ NULL até aceitar proposta
+                'endereco' => $endereco,
+                'data' => now(),
+                'status' => 'pendente',
+                'prestador_id' => null,
+                'servico_id' => null,
+                'valor' => null,
             ]);
-
-            // Limpar cache
-            $this->clearPedidoCache($pedido->id, $cliente->id, null);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Pedido publicado com sucesso!',
-                'data' => $this->formatPedido($pedido)
+                'data' => $pedido
             ], 201);
         } catch (\Exception $e) {
+            Log::error('❌ ERRO: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Erro ao criar pedido: ' . $e->getMessage()
@@ -141,7 +185,10 @@ class PedidoController extends Controller
      */
     public function meusPedidos(Request $request)
     {
+        Log::info('🔵 PedidoController@meusPedidos - INICIADO');
+
         $cliente = $request->user();
+        Log::info('Cliente ID: ' . ($cliente ? $cliente->id : 'null'));
 
         $pedidos = Pedido::where('cliente_id', $cliente->id)
             ->with(['categoria', 'prestador' => function ($q) {
@@ -149,6 +196,8 @@ class PedidoController extends Controller
             }])
             ->orderBy('created_at', 'desc')
             ->get();
+
+        Log::info('✅ Pedidos encontrados: ' . $pedidos->count());
 
         return response()->json([
             'success' => true,
@@ -159,14 +208,22 @@ class PedidoController extends Controller
     }
 
     /**
-     * Atualizar status do pedido - ✅ RETORNA ARRAY COM CASTS
+     * Atualizar status do pedido
      * PUT /api/admin/pedidos/{id}/status
      */
     public function updateStatus(Request $request, $id)
     {
+        Log::info('🔵 PedidoController@updateStatus - ID: ' . $id);
+        // LOG COMPLETO DO QUE O FRONTEND ENVIA
+        Log::info('========== CONTEÚDO COMPLETO DO REQUEST ==========');
+        Log::info('POST params: ' . json_encode($request->post()));
+        Log::info('REQUEST all: ' . json_encode($request->all()));
+        Log::info('RAW CONTENT: ' . $request->getContent());
+        Log::info('==================================================');
         $pedido = Pedido::find($id);
 
         if (!$pedido) {
+            Log::warning('⚠️ Pedido não encontrado - ID: ' . $id);
             return response()->json([
                 'success' => false,
                 'error' => 'Pedido não encontrado'
@@ -174,7 +231,7 @@ class PedidoController extends Controller
         }
 
         $validator = Validator::make($request->all(), [
-            'status' => 'required|in:aberto,pendente,aceito,em_andamento,concluido,cancelado'
+            'status' => 'required|in:pendente,aceito,em_andamento,concluido,cancelado'
         ]);
 
         if ($validator->fails()) {
@@ -198,12 +255,15 @@ class PedidoController extends Controller
                 'avaliacao'
             ]);
 
+            Log::info('✅ Status atualizado para: ' . $request->status);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Status atualizado com sucesso',
                 'data' => $this->formatPedido($pedido)
             ]);
         } catch (\Exception $e) {
+            Log::error('❌ Erro ao atualizar status: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao atualizar status: ' . $e->getMessage()
@@ -212,14 +272,17 @@ class PedidoController extends Controller
     }
 
     /**
-     * Cancelar pedido (admin) - ✅ RETORNA MENSAGEM
+     * Cancelar pedido (admin)
      * DELETE /api/admin/pedidos/{id}/cancel
      */
     public function cancel($id)
     {
+        Log::info('🔵 PedidoController@cancel - ID: ' . $id);
+
         $pedido = Pedido::find($id);
 
         if (!$pedido) {
+            Log::warning('⚠️ Pedido não encontrado - ID: ' . $id);
             return response()->json([
                 'success' => false,
                 'error' => 'Pedido não encontrado'
@@ -232,11 +295,14 @@ class PedidoController extends Controller
 
             $this->clearPedidoCache($id, $pedido->cliente_id, $pedido->prestador_id);
 
+            Log::info('✅ Pedido cancelado - ID: ' . $id);
+
             return response()->json([
                 'success' => true,
                 'message' => 'Pedido cancelado com sucesso'
             ]);
         } catch (\Exception $e) {
+            Log::error('❌ Erro ao cancelar pedido: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao cancelar pedido: ' . $e->getMessage()
@@ -245,24 +311,22 @@ class PedidoController extends Controller
     }
 
     /**
-     * Formatar pedido com casts corretos (ATUALIZADO)
+     * Formatar pedido com casts corretos
      */
     private function formatPedido($pedido)
     {
         return [
             'id' => (int) $pedido->id,
-            'numero' => (string) $pedido->numero,
             'status' => (string) $pedido->status,
-            'descricao' => $pedido->descricao ? (string) $pedido->descricao : null,  // ✅ NOVO
-            'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,      // ✅ NOVO
+            'descricao' => $pedido->descricao ? (string) $pedido->descricao : null,
+            'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,
             'data' => $pedido->data ? $pedido->data->toISOString() : null,
             'endereco' => (string) $pedido->endereco,
             'observacoes' => $pedido->observacoes ? (string) $pedido->observacoes : null,
-            'valor' => $pedido->valor ? (float) $pedido->valor : null,  // ✅ PODE SER NULL
+            'valor' => $pedido->valor ? (float) $pedido->valor : null,
             'created_at' => $pedido->created_at ? $pedido->created_at->toISOString() : null,
             'updated_at' => $pedido->updated_at ? $pedido->updated_at->toISOString() : null,
 
-            // ✅ NOVO - Categoria
             'categoria' => $pedido->categoria ? [
                 'id' => (int) $pedido->categoria->id,
                 'nome' => (string) $pedido->categoria->nome,
@@ -270,7 +334,6 @@ class PedidoController extends Controller
                 'cor' => (string) $pedido->categoria->cor,
             ] : null,
 
-            // Relacionamentos
             'cliente' => $pedido->cliente ? [
                 'id' => (int) $pedido->cliente->id,
                 'nome' => (string) $pedido->cliente->nome,
@@ -303,25 +366,22 @@ class PedidoController extends Controller
     }
 
     /**
-     * Limpar cache do pedido (ATUALIZADO)
+     * Limpar cache do pedido
      */
     private function clearPedidoCache($pedidoId, $clienteId, $prestadorId)
     {
-        // Limpar cache do pedido específico
         Cache::forget("pedido_detalhes_{$pedidoId}");
 
-        // Limpar cache de admin
         for ($page = 1; $page <= 5; $page++) {
             Cache::forget("admin_pedidos_page_{$page}");
-            $statuses = ['aberto', 'pendente', 'aceito', 'em_andamento', 'concluido', 'cancelado'];
+            $statuses = ['pendente', 'aceito', 'em_andamento', 'concluido', 'cancelado'];
             foreach ($statuses as $status) {
                 Cache::forget("admin_pedidos_status_{$status}_page_{$page}");
             }
         }
 
-        // Limpar cache do cliente
         if ($clienteId) {
-            $statuses = ['aberto', 'pendente', 'aceito', 'concluido', 'cancelado', null];
+            $statuses = ['pendente', 'aceito', 'concluido', 'cancelado', null];
             foreach ($statuses as $status) {
                 for ($page = 1; $page <= 5; $page++) {
                     $statusKey = $status ?: 'all';
@@ -330,9 +390,8 @@ class PedidoController extends Controller
             }
         }
 
-        // Limpar cache do prestador
         if ($prestadorId) {
-            $statuses = ['aberto', 'pendente', 'aceito', 'concluido', 'cancelado', null];
+            $statuses = ['pendente', 'aceito', 'concluido', 'cancelado', null];
             foreach ($statuses as $status) {
                 for ($page = 1; $page <= 5; $page++) {
                     $statusKey = $status ?: 'all';

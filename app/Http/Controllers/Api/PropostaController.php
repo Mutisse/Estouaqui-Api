@@ -228,11 +228,11 @@ class PropostaController extends Controller
         $propostas = Proposta::whereHas('pedido', function ($query) use ($cliente) {
             $query->where('cliente_id', $cliente->id);
         })
-        ->with(['prestador' => function ($q) {
-            $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao');
-        }, 'pedido'])
-        ->orderBy('created_at', 'desc')
-        ->get();
+            ->with(['prestador' => function ($q) {
+                $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao');
+            }, 'pedido'])
+            ->orderBy('created_at', 'desc')
+            ->get();
 
         return response()->json([
             'success' => true,
@@ -269,17 +269,15 @@ class PropostaController extends Controller
     {
         $prestador = $request->user();
 
-        // Buscar pedidos abertos da área do prestador
-        $pedidos = Pedido::where('status', 'aberto')
-            ->where('categoria_id', $prestador->categorias()->pluck('categoria_id'))
+        // Buscar pedidos que o prestador AINDA NÃO fez proposta
+        $pedidos = Pedido::where('status', 'pendente')
             ->whereDoesntHave('propostas', function ($query) use ($prestador) {
                 $query->where('prestador_id', $prestador->id);
             })
-            ->with(['cliente' => function ($q) {
-                $q->select('id', 'nome', 'foto');
-            }, 'categoria'])
+            // Opcional: filtrar por categorias que o prestador atende
+            ->whereIn('categoria_id', $prestador->categorias()->pluck('categorias.id'))
             ->orderBy('created_at', 'desc')
-            ->get();
+            ->paginate(20);
 
         return response()->json([
             'success' => true,

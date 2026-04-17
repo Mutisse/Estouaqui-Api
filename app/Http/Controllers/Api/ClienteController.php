@@ -11,7 +11,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class ClienteController extends Controller
 {
@@ -87,6 +87,10 @@ class ClienteController extends Controller
      * Listar pedidos do cliente
      * GET /api/cliente/pedidos
      */
+    /**
+     * Listar pedidos do cliente
+     * GET /api/cliente/pedidos
+     */
     public function pedidos(Request $request)
     {
         $user = $request->user();
@@ -95,24 +99,103 @@ class ClienteController extends Controller
 
         $cacheKey = "cliente_pedidos_{$user->id}_{$status}_{$page}";
 
-        $pedidos = Cache::remember($cacheKey, 120, function() use ($user, $status) {
+        $pedidos = Cache::remember($cacheKey, 120, function () use ($user, $status) {
             $query = Pedido::where('cliente_id', $user->id);
 
             if ($status) {
                 $query->where('status', $status);
             }
 
-            return $query->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
+            $pedidos = $query->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
                 ->orderBy('created_at', 'desc')
-                ->paginate(20);
+                ->get(); // ✅ Mudar de paginate() para get()
+
+            // ✅ Converter para array com os campos formatados
+            return $pedidos->map(function ($pedido) {
+                return [
+                    'id' => $pedido->id,
+                    'status' => $pedido->status,
+                    'descricao' => $pedido->descricao,
+                    'data' => $pedido->data,
+                    'endereco' => $pedido->endereco,
+                    'created_at' => $pedido->created_at,
+                    'prestador' => $pedido->prestador ? [
+                        'id' => $pedido->prestador->id,
+                        'nome' => $pedido->prestador->nome,
+                        'foto' => $pedido->prestador->foto ? asset('storage/' . $pedido->prestador->foto) : null,
+                        'telefone' => $pedido->prestador->telefone,
+                        'media_avaliacao' => $pedido->prestador->media_avaliacao ?? 0,
+                    ] : null,
+                ];
+            });
         });
 
         return response()->json([
             'success' => true,
-            'data' => $pedidos
+            'data' => $pedidos  // ✅ Agora é um array, não um objeto Paginator
         ]);
     }
+    /**
+     * Listar pedidos do cliente (formato mobile - sem paginação)
+     * GET /api/cliente/meus-pedidos
+     */
+   // app/Http/Controllers/Api/ClienteController.php
 
+    /**
+     * Listar pedidos do cliente
+     * GET /api/cliente/pedidos/meus-pedidos
+     */
+    public function meusPedidos(Request $request)
+    {
+        try {
+            $user = $request->user();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Usuário não autenticado'
+                ], 401);
+            }
+
+            $pedidos = Pedido::where('cliente_id', $user->id)
+                ->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
+                ->orderBy('created_at', 'desc')
+                ->get();
+
+            $pedidosFormatados = $pedidos->map(function ($pedido) {
+                return [
+                    'id' => $pedido->id,
+                    'numero' => $pedido->numero ?? 'PED-' . str_pad($pedido->id, 6, '0', STR_PAD_LEFT),
+                    'status' => $pedido->status,
+                    'descricao' => $pedido->descricao,
+                    'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,
+                    'data' => $pedido->data,
+                    'endereco' => $pedido->endereco,
+                    'observacoes' => $pedido->observacoes,
+                    'valor' => $pedido->valor,
+                    'created_at' => $pedido->created_at,
+                    'prestador' => $pedido->prestador ? [
+                        'id' => $pedido->prestador->id,
+                        'nome' => $pedido->prestador->nome,
+                        'foto' => $pedido->prestador->foto ? asset('storage/' . $pedido->prestador->foto) : null,
+                        'telefone' => $pedido->prestador->telefone,
+                        'media_avaliacao' => (float) ($pedido->prestador->media_avaliacao ?? 0),
+                    ] : null,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $pedidosFormatados
+            ]);
+        } catch (\Exception $e) {
+           error_log('Erro: ' . $e->getMessage());  // PHP nativo
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao carregar pedidos: ' . $e->getMessage()
+            ], 500);
+        }
+    }
     /**
      * Detalhes de um pedido específico
      * GET /api/cliente/pedidos/{id}
@@ -122,7 +205,7 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_pedido_{$user->id}_{$id}";
 
-        $pedido = Cache::remember($cacheKey, 300, function() use ($user, $id) {
+        $pedido = Cache::remember($cacheKey, 300, function () use ($user, $id) {
             return Pedido::where('cliente_id', $user->id)
                 ->with(['prestador:id,nome,foto,telefone,media_avaliacao', 'servico:id,nome,preco,duracao', 'avaliacao'])
                 ->find($id);
@@ -243,7 +326,7 @@ class ClienteController extends Controller
         $page = $request->query('page', 1);
         $cacheKey = "cliente_avaliacoes_{$user->id}_{$page}";
 
-        $avaliacoes = Cache::remember($cacheKey, 300, function() use ($user) {
+        $avaliacoes = Cache::remember($cacheKey, 300, function () use ($user) {
             return Avaliacao::where('cliente_id', $user->id)
                 ->with('prestador:id,nome,foto,telefone')
                 ->orderBy('created_at', 'desc')
@@ -430,7 +513,7 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_pedido_avaliacao_{$user->id}_{$pedidoId}";
 
-        $existe = Cache::remember($cacheKey, 3600, function() use ($user, $pedidoId) {
+        $existe = Cache::remember($cacheKey, 3600, function () use ($user, $pedidoId) {
             return Avaliacao::where('pedido_id', $pedidoId)
                 ->where('cliente_id', $user->id)
                 ->exists();
@@ -473,7 +556,7 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_favoritos_{$user->id}";
 
-        $favoritos = Cache::remember($cacheKey, 300, function() use ($user) {
+        $favoritos = Cache::remember($cacheKey, 300, function () use ($user) {
             return Favorito::where('cliente_id', $user->id)
                 ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
                 ->orderBy('created_at', 'desc')
@@ -577,7 +660,7 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_favorito_check_{$user->id}_{$prestadorId}";
 
-        $isFavorito = Cache::remember($cacheKey, 600, function() use ($user, $prestadorId) {
+        $isFavorito = Cache::remember($cacheKey, 600, function () use ($user, $prestadorId) {
             return Favorito::where('cliente_id', $user->id)
                 ->where('prestador_id', $prestadorId)
                 ->exists();

@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Controller genérico para funcionalidades comuns a todos os usuários
@@ -19,6 +20,14 @@ use Illuminate\Support\Facades\Cache;
  */
 class UsuarioController extends Controller
 {
+    // ==========================================
+    // CONSTANTES DE CACHE
+    // ==========================================
+    private const CACHE_SHORT = 120;      // 2 minutos
+    private const CACHE_MEDIUM = 600;     // 10 minutos
+    private const CACHE_LONG = 3600;      // 1 hora
+    private const CACHE_VERY_LONG = 86400; // 24 horas
+
     // ==========================================
     // 1. FUNCIONALIDADES COMUNS (todos os perfis) - COM CACHE
     // ==========================================
@@ -32,7 +41,7 @@ class UsuarioController extends Controller
         $user = $request->user();
         $cacheKey = "user_profile_{$user->id}";
 
-        $data = Cache::remember($cacheKey, 3600, function() use ($user) {
+        $data = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             return [
                 'id' => $user->id,
                 'nome' => $user->nome,
@@ -247,7 +256,7 @@ class UsuarioController extends Controller
         $user = $request->user();
         $cacheKey = "dashboard_{$user->id}";
 
-        $data = Cache::remember($cacheKey, 300, function() use ($user) {
+        $data = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user) {
             $result = [
                 'user' => [
                     'id' => $user->id,
@@ -261,7 +270,6 @@ class UsuarioController extends Controller
                 ]
             ];
 
-            // Estatísticas específicas por perfil
             if ($user->isCliente()) {
                 $result['stats']['pedidos_ativos'] = Pedido::where('cliente_id', $user->id)
                     ->whereIn('status', ['pendente', 'aceito', 'em_andamento'])
@@ -300,7 +308,7 @@ class UsuarioController extends Controller
     // ==========================================
 
     /**
-     * Listar notificações do usuário - COM CACHE
+     * Listar notificações do usuário - VERSÃO OTIMIZADA
      * GET /api/notifications
      */
     public function notifications(Request $request)
@@ -308,7 +316,25 @@ class UsuarioController extends Controller
         $user = $request->user();
         $cacheKey = "notifications_{$user->id}";
 
-        $notifications = Cache::remember($cacheKey, 120, function() use ($user) {
+        $notifications = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($user) {
+            if ($this->hasNotificationsTable()) {
+                return $user->notifications()
+                    ->orderBy('created_at', 'desc')
+                    ->limit(30)
+                    ->get()
+                    ->map(function ($notif) {
+                        $data = $notif->data ?? [];
+                        return [
+                            'id' => $notif->id,
+                            'type' => $notif->type,
+                            'titulo' => $data['titulo'] ?? 'Notificação',
+                            'mensagem' => $data['mensagem'] ?? '',
+                            'lida' => !is_null($notif->read_at),
+                            'created_at' => $notif->created_at->toISOString(),
+                        ];
+                    })->toArray();
+            }
+
             return $this->getMockNotificationsByProfile($user);
         });
 
@@ -317,11 +343,23 @@ class UsuarioController extends Controller
             'data' => [
                 'current_page' => 1,
                 'data' => $notifications,
-                'per_page' => 20,
+                'per_page' => 30,
                 'total' => count($notifications),
                 'last_page' => 1,
             ]
         ]);
+    }
+
+    /**
+     * Verificar se tabela de notificações existe
+     */
+    private function hasNotificationsTable(): bool
+    {
+        try {
+            return Schema::hasTable('notifications');
+        } catch (\Exception $e) {
+            return false;
+        }
     }
 
     /**
@@ -331,6 +369,14 @@ class UsuarioController extends Controller
     public function markNotificationRead(Request $request, $id)
     {
         $user = $request->user();
+
+        if ($this->hasNotificationsTable()) {
+            $notification = $user->notifications()->where('id', $id)->first();
+            if ($notification) {
+                $notification->markAsRead();
+            }
+        }
+
         Cache::forget("notifications_{$user->id}");
         return response()->json(['success' => true]);
     }
@@ -342,6 +388,11 @@ class UsuarioController extends Controller
     public function markAllNotificationsRead(Request $request)
     {
         $user = $request->user();
+
+        if ($this->hasNotificationsTable()) {
+            $user->unreadNotifications->markAsRead();
+        }
+
         Cache::forget("notifications_{$user->id}");
         return response()->json(['success' => true]);
     }
@@ -355,7 +406,7 @@ class UsuarioController extends Controller
         $user = $request->user();
         $cacheKey = "notif_preferences_{$user->id}";
 
-        $preferences = Cache::remember($cacheKey, 3600, function() use ($user) {
+        $preferences = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             $defaultPreferences = [
                 'cliente' => [
                     'email' => true,
@@ -395,7 +446,8 @@ class UsuarioController extends Controller
             ];
 
             $profile = $user->tipo;
-            return $user->preferences['notifications'] ?? $defaultPreferences[$profile] ?? $defaultPreferences['cliente'];
+            $preferencesData = $user->preferences ?? [];
+            return $preferencesData['notifications'] ?? $defaultPreferences[$profile] ?? $defaultPreferences['cliente'];
         });
 
         return response()->json([
@@ -461,11 +513,12 @@ class UsuarioController extends Controller
         $user = $request->user();
         $cacheKey = "user_preferences_{$user->id}";
 
-        $preferences = Cache::remember($cacheKey, 3600, function() use ($user) {
+        $preferences = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
+            $preferencesData = $user->preferences ?? [];
             return [
-                'theme' => $user->preferences['theme'] ?? 'light',
-                'language' => $user->preferences['language'] ?? 'pt',
-                'notifications' => $user->preferences['notifications'] ?? true,
+                'theme' => $preferencesData['theme'] ?? 'light',
+                'language' => $preferencesData['language'] ?? 'pt',
+                'notifications' => $preferencesData['notifications_enabled'] ?? true,
             ];
         });
 
@@ -499,7 +552,7 @@ class UsuarioController extends Controller
         $preferences = $user->preferences ?? [];
         if ($request->has('theme')) $preferences['theme'] = $request->theme;
         if ($request->has('language')) $preferences['language'] = $request->language;
-        if ($request->has('notifications')) $preferences['notifications'] = $request->notifications;
+        if ($request->has('notifications')) $preferences['notifications_enabled'] = $request->notifications;
 
         $user->preferences = $preferences;
         $user->save();
@@ -514,32 +567,73 @@ class UsuarioController extends Controller
     }
 
     // ==========================================
-    // 4. ENDEREÇOS DO USUÁRIO
+    // 4. ENDEREÇOS DO USUÁRIO (SIMPLIFICADO)
     // ==========================================
 
     /**
-     * Listar endereços do usuário
+     * Listar endereços do usuário (apenas o endereço principal do perfil)
      * GET /api/addresses
      */
     public function addresses(Request $request)
     {
+        $user = $request->user();
+
+        // Retorna o endereço do perfil do usuário como array único
+        $addresses = [];
+        if ($user->endereco) {
+            $addresses[] = [
+                'id' => 1,
+                'endereco' => $user->endereco,
+                'principal' => true,
+            ];
+        }
+
         return response()->json([
             'success' => true,
-            'data' => []
+            'data' => $addresses
         ]);
     }
 
     /**
-     * Criar novo endereço
+     * Criar/Atualizar endereço principal do usuário
      * POST /api/addresses
      */
     public function createAddress(Request $request)
     {
-        return response()->json([
-            'success' => true,
-            'message' => 'Endereço criado com sucesso',
-            'data' => []
-        ], 201);
+        $user = $request->user();
+
+        $validator = Validator::make($request->all(), [
+            'endereco' => 'required|string|max:255',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'error' => $validator->errors()->first()
+            ], 422);
+        }
+
+        try {
+            $user->endereco = $request->endereco;
+            $user->save();
+
+            $this->clearUserCache($user->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Endereço atualizado com sucesso',
+                'data' => [
+                    'id' => 1,
+                    'endereco' => $user->endereco,
+                    'principal' => true,
+                ]
+            ], 201);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar endereço'
+            ], 500);
+        }
     }
 
     /**
@@ -548,10 +642,23 @@ class UsuarioController extends Controller
      */
     public function getAddress($id)
     {
+        $user = request()->user();
+
+        if ($id == 1 && $user->endereco) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'id' => 1,
+                    'endereco' => $user->endereco,
+                    'principal' => true,
+                ]
+            ]);
+        }
+
         return response()->json([
-            'success' => true,
-            'data' => []
-        ]);
+            'success' => false,
+            'error' => 'Endereço não encontrado'
+        ], 404);
     }
 
     /**
@@ -560,10 +667,7 @@ class UsuarioController extends Controller
      */
     public function updateAddress(Request $request, $id)
     {
-        return response()->json([
-            'success' => true,
-            'message' => 'Endereço atualizado com sucesso'
-        ]);
+        return $this->createAddress($request);
     }
 
     /**
@@ -572,22 +676,44 @@ class UsuarioController extends Controller
      */
     public function deleteAddress($id)
     {
+        $user = request()->user();
+
+        if ($id == 1 && $user->endereco) {
+            $user->endereco = null;
+            $user->save();
+            $this->clearUserCache($user->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Endereço removido com sucesso'
+            ]);
+        }
+
         return response()->json([
-            'success' => true,
-            'message' => 'Endereço removido com sucesso'
-        ]);
+            'success' => false,
+            'error' => 'Endereço não encontrado'
+        ], 404);
     }
 
     /**
-     * Definir endereço principal
+     * Definir endereço principal (já que só temos um, apenas confirma)
      * PUT /api/addresses/{id}/primary
      */
     public function setPrimaryAddress($id)
     {
+        $user = request()->user();
+
+        if ($id == 1 && $user->endereco) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Endereço principal definido com sucesso'
+            ]);
+        }
+
         return response()->json([
-            'success' => true,
-            'message' => 'Endereço principal definido com sucesso'
-        ]);
+            'success' => false,
+            'error' => 'Endereço não encontrado'
+        ], 404);
     }
 
     // ==========================================
@@ -603,7 +729,7 @@ class UsuarioController extends Controller
         $email = $request->query('email');
         $cacheKey = "email_available_" . md5($email);
 
-        $exists = Cache::remember($cacheKey, 300, function() use ($email) {
+        $exists = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($email) {
             return User::where('email', $email)->exists();
         });
 
@@ -619,7 +745,7 @@ class UsuarioController extends Controller
         $phone = $request->query('phone');
         $cacheKey = "phone_available_" . md5($phone);
 
-        $exists = Cache::remember($cacheKey, 300, function() use ($phone) {
+        $exists = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($phone) {
             return User::where('telefone', $phone)->exists();
         });
 
@@ -669,13 +795,12 @@ class UsuarioController extends Controller
     public function recentActivities(Request $request)
     {
         $user = $request->user();
-        $limit = $request->get('limit', 10);
+        $limit = min($request->get('limit', 10), 50);
         $cacheKey = "recent_activities_{$user->id}_{$limit}";
 
-        $activities = Cache::remember($cacheKey, 120, function() use ($user, $limit) {
+        $activities = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($user, $limit) {
             $activities = [];
 
-            // Últimos pedidos (como cliente)
             $pedidosCliente = Pedido::where('cliente_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->limit($limit)
@@ -685,7 +810,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatPedidoActivity($pedido, 'pedido');
             }
 
-            // Últimos pedidos (como prestador)
             $pedidosPrestador = Pedido::where('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->limit($limit)
@@ -695,7 +819,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatPedidoActivity($pedido, 'solicitacao');
             }
 
-            // Últimas avaliações
             $avaliacoes = Avaliacao::where('cliente_id', $user->id)
                 ->orWhere('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
@@ -706,7 +829,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatAvaliacaoActivity($avaliacao, $user->id);
             }
 
-            // Últimas transações
             $transacoes = Transacao::where('user_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->limit($limit)
@@ -740,14 +862,13 @@ class UsuarioController extends Controller
     public function activitiesHistory(Request $request)
     {
         $user = $request->user();
-        $page = $request->get('page', 1);
-        $perPage = $request->get('per_page', 20);
+        $page = max(1, (int) $request->get('page', 1));
+        $perPage = min(50, max(10, (int) $request->get('per_page', 20)));
         $cacheKey = "activities_history_{$user->id}_{$page}_{$perPage}";
 
-        $result = Cache::remember($cacheKey, 300, function() use ($user, $page, $perPage) {
+        $result = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $page, $perPage) {
             $activities = [];
 
-            // Pedidos como cliente
             $pedidosCliente = Pedido::where('cliente_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->get();
@@ -756,7 +877,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatPedidoHistory($pedido, 'pedido', $user->id);
             }
 
-            // Pedidos como prestador
             $pedidosPrestador = Pedido::where('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->get();
@@ -765,7 +885,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatPedidoHistory($pedido, 'solicitacao', $user->id);
             }
 
-            // Avaliações
             $avaliacoes = Avaliacao::where('cliente_id', $user->id)
                 ->orWhere('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
@@ -775,7 +894,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatAvaliacaoHistory($avaliacao, $user->id);
             }
 
-            // Transações
             $transacoes = Transacao::where('user_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->get();
@@ -784,7 +902,6 @@ class UsuarioController extends Controller
                 $activities[] = $this->formatTransacaoHistory($transacao);
             }
 
-            // Ordenar e paginar
             $collection = collect($activities)->sortByDesc('data')->values();
             $total = $collection->count();
             $paginated = $collection->slice(($page - 1) * $perPage, $perPage)->values();
@@ -823,9 +940,13 @@ class UsuarioController extends Controller
         Cache::forget("notif_preferences_{$userId}");
         Cache::forget("user_preferences_{$userId}");
         Cache::forget("recent_activities_{$userId}_10");
+        Cache::forget("recent_activities_{$userId}_20");
+        Cache::forget("recent_activities_{$userId}_50");
 
-        for ($page = 1; $page <= 5; $page++) {
+        for ($page = 1; $page <= 10; $page++) {
+            Cache::forget("activities_history_{$userId}_{$page}_10");
             Cache::forget("activities_history_{$userId}_{$page}_20");
+            Cache::forget("activities_history_{$userId}_{$page}_50");
         }
     }
 
@@ -922,7 +1043,7 @@ class UsuarioController extends Controller
         return [
             'id' => $pedido->id,
             'tipo' => $tipo,
-            'titulo' => $tipo === 'pedido' ? 'Pedido #' . $pedido->numero : 'Solicitação #' . $pedido->numero,
+            'titulo' => $tipo === 'pedido' ? 'Pedido #' . ($pedido->numero ?? $pedido->id) : 'Solicitação #' . ($pedido->numero ?? $pedido->id),
             'descricao' => $descricoes[$pedido->status] ?? 'Pedido criado',
             'data' => $pedido->created_at,
             'status' => $pedido->status,

@@ -211,10 +211,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:cliente')->prefix('cliente')->group(function () {
 
         // Pedidos - NOVAS ROTAS
+        // Pedidos - ROTAS CORRIGIDAS
         Route::prefix('pedidos')->group(function () {
-            Route::post('/', [PedidoController::class, 'createPedido']);        // ✅ Criar pedido
-            Route::get('/', [PedidoController::class, 'meusPedidos']);          // ✅ Listar meus pedidos
-            Route::get('/{id}', [PedidoController::class, 'showPedido']);       // ✅ Detalhes do pedido
+            Route::post('/', [PedidoController::class, 'createPedido']);           // ✅ Criar pedido
+            Route::get('/meus-pedidos', [ClienteController::class, 'meusPedidos']); // ✅ Listar meus pedidos
+            Route::get('/{id}', [PedidoController::class, 'show']);                // ✅ Detalhes do pedido (CORRIGIDO)
             Route::put('/{id}/cancelar', [PedidoController::class, 'cancelarPedido']); // ✅ Cancelar pedido
         });
 

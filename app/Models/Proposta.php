@@ -19,34 +19,17 @@ class Proposta extends Model
 
     protected $casts = [
         'valor' => 'decimal:2',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
     ];
 
-    // Relacionamentos
+    // Pertence a um pedido
     public function pedido()
     {
-        return $this->belongsTo(Pedido::class);
+        return $this->belongsTo(Pedido::class, 'pedido_id');
     }
 
+    // Pertence a um prestador
     public function prestador()
     {
         return $this->belongsTo(User::class, 'prestador_id');
-    }
-
-    // Scopes
-    public function scopePendente($query)
-    {
-        return $query->where('status', 'pendente');
-    }
-
-    public function scopeAceita($query)
-    {
-        return $query->where('status', 'aceita');
-    }
-
-    public function scopeRecusada($query)
-    {
-        return $query->where('status', 'recusada');
     }
 }

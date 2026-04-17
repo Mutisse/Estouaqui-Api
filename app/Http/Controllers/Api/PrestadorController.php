@@ -21,6 +21,14 @@ use Illuminate\Support\Facades\DB;
 class PrestadorController extends Controller
 {
     // ==========================================
+    // CONSTANTES DE CACHE
+    // ==========================================
+    private const CACHE_SHORT = 120;      // 2 minutos
+    private const CACHE_MEDIUM = 600;     // 10 minutos
+    private const CACHE_LONG = 3600;      // 1 hora
+    private const CACHE_VERY_LONG = 86400; // 24 horas
+
+    // ==========================================
     // 1. REGISTRO DO PRESTADOR
     // ==========================================
 
@@ -112,6 +120,7 @@ class PrestadorController extends Controller
                 'token' => $token
             ], 201);
         } catch (\Exception $e) {
+            Log::error('Erro ao registar prestador: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao registar prestador: ' . $e->getMessage()
@@ -120,7 +129,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 2. SERVIÇOS DO PRESTADOR (COM CACHE E TOARRAY)
+    // 2. SERVIÇOS DO PRESTADOR
     // ==========================================
 
     /**
@@ -132,12 +141,27 @@ class PrestadorController extends Controller
         $user = $request->user();
         $cacheKey = "prestador_servicos_{$user->id}";
 
-        $servicos = Cache::remember($cacheKey, 300, function () use ($user) {
+        $servicos = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             return Servico::where('prestador_id', $user->id)
-                ->with('categoria')
+                ->with('categoria:id,nome')
+                ->select(['id', 'nome', 'categoria_id', 'preco', 'duracao', 'descricao', 'icone', 'ativo', 'created_at'])
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->map(function ($servico) {
+                    return [
+                        'id' => (int) $servico->id,
+                        'nome' => (string) $servico->nome,
+                        'categoria_id' => (int) $servico->categoria_id,
+                        'categoria_nome' => $servico->categoria ? $servico->categoria->nome : null,
+                        'preco' => (float) $servico->preco,
+                        'duracao' => (int) $servico->duracao,
+                        'descricao' => $servico->descricao,
+                        'icone' => (string) $servico->icone,
+                        'ativo' => (bool) $servico->ativo,
+                        'created_at' => $servico->created_at ? $servico->created_at->toISOString() : null,
+                    ];
+                })
+                ->toArray();
         });
 
         return response()->json([
@@ -182,7 +206,7 @@ class PrestadorController extends Controller
                 'ativo' => true,
             ]);
 
-            Cache::forget("prestador_servicos_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -190,6 +214,7 @@ class PrestadorController extends Controller
                 'data' => $servico
             ], 201);
         } catch (\Exception $e) {
+            Log::error('Erro ao criar serviço: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao criar serviço'
@@ -220,6 +245,7 @@ class PrestadorController extends Controller
             'duracao' => 'sometimes|integer|min:5',
             'descricao' => 'nullable|string',
             'icone' => 'nullable|string',
+            'ativo' => 'sometimes|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -236,10 +262,11 @@ class PrestadorController extends Controller
             if ($request->has('duracao')) $servico->duracao = $request->duracao;
             if ($request->has('descricao')) $servico->descricao = $request->descricao;
             if ($request->has('icone')) $servico->icone = $request->icone;
+            if ($request->has('ativo')) $servico->ativo = $request->ativo;
 
             $servico->save();
 
-            Cache::forget("prestador_servicos_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -247,6 +274,7 @@ class PrestadorController extends Controller
                 'data' => $servico
             ]);
         } catch (\Exception $e) {
+            Log::error('Erro ao atualizar serviço: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao atualizar serviço'
@@ -271,8 +299,7 @@ class PrestadorController extends Controller
         }
 
         $servico->delete();
-
-        Cache::forget("prestador_servicos_{$user->id}");
+        $this->clearPrestadorCache($user->id);
 
         return response()->json([
             'success' => true,
@@ -299,7 +326,7 @@ class PrestadorController extends Controller
         $servico->ativo = !$servico->ativo;
         $servico->save();
 
-        Cache::forget("prestador_servicos_{$user->id}");
+        $this->clearPrestadorCache($user->id);
 
         return response()->json([
             'success' => true,
@@ -318,9 +345,6 @@ class PrestadorController extends Controller
      */
     public function agenda(Request $request)
     {
-        $user = $request->user();
-        $semana = $request->query('semana');
-
         return response()->json([
             'success' => true,
             'data' => []
@@ -333,8 +357,6 @@ class PrestadorController extends Controller
      */
     public function bloquearHorario(Request $request)
     {
-        $user = $request->user();
-
         $validator = Validator::make($request->all(), [
             'data' => 'required|date',
             'horario_inicio' => 'required|date_format:H:i',
@@ -367,7 +389,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 4. SOLICITAÇÕES/PEDIDOS (COM CACHE E TOARRAY)
+    // 4. SOLICITAÇÕES/PEDIDOS
     // ==========================================
 
     /**
@@ -381,7 +403,7 @@ class PrestadorController extends Controller
         $page = $request->query('page', 1);
         $cacheKey = "prestador_solicitacoes_{$user->id}_" . ($status ?? 'all') . "_{$page}";
 
-        $pedidos = Cache::remember($cacheKey, 120, function () use ($user, $status) {
+        $pedidos = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $status) {
             $query = Pedido::where('prestador_id', $user->id)
                 ->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco']);
 
@@ -480,8 +502,20 @@ class PrestadorController extends Controller
         $user = $request->user();
         $cacheKey = "prestador_categorias_{$user->id}";
 
-        $categorias = Cache::remember($cacheKey, 3600, function () use ($user) {
-            return $user->categorias()->get()->toArray(); // ✅ CONVERTER PARA ARRAY
+        $categorias = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
+            return $user->categorias()
+                ->select(['categorias.id', 'categorias.nome', 'categorias.slug', 'categorias.icone', 'categorias.cor'])
+                ->get()
+                ->map(function ($cat) {
+                    return [
+                        'id' => (int) $cat->id,
+                        'nome' => (string) $cat->nome,
+                        'slug' => (string) $cat->slug,
+                        'icone' => (string) ($cat->icone ?? 'category'),
+                        'cor' => (string) ($cat->cor ?? 'primary'),
+                    ];
+                })
+                ->toArray();
         });
 
         return response()->json([
@@ -498,8 +532,7 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $user->categorias()->attach($categoriaId);
-
-        Cache::forget("prestador_categorias_{$user->id}");
+        $this->clearPrestadorCache($user->id);
 
         return response()->json([
             'success' => true,
@@ -515,8 +548,7 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $user->categorias()->detach($categoriaId);
-
-        Cache::forget("prestador_categorias_{$user->id}");
+        $this->clearPrestadorCache($user->id);
 
         return response()->json([
             'success' => true,
@@ -525,7 +557,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 6. ESTATÍSTICAS DO PRESTADOR (OTIMIZADO)
+    // 6. ESTATÍSTICAS DO PRESTADOR
     // ==========================================
 
     /**
@@ -537,7 +569,7 @@ class PrestadorController extends Controller
         $userId = $request->user()->id;
         $cacheKey = "prestador_stats_{$userId}";
 
-        $stats = Cache::remember($cacheKey, 300, function () use ($userId) {
+        $stats = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId) {
             $result = DB::table('pedidos')
                 ->where('prestador_id', $userId)
                 ->selectRaw("
@@ -566,17 +598,9 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 7. PERFIL DO PRESTADOR (público) - COM TOARRAY
+    // 7. PERFIL DO PRESTADOR (público)
     // ==========================================
 
-    /**
-     * Listar prestadores (público)
-     * GET /api/prestadores
-     */
-    /**
-     * Listar prestadores (público)
-     * GET /api/prestadores
-     */
     /**
      * Listar prestadores (público)
      * GET /api/prestadores
@@ -585,10 +609,10 @@ class PrestadorController extends Controller
     {
         $cacheKey = "prestadores_list_" . md5($request->fullUrl());
 
-        $prestadores = Cache::remember($cacheKey, 600, function () use ($request) {
+        $prestadores = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($request) {
             $query = User::where('tipo', 'prestador')
                 ->where('ativo', true)
-                ->with('categorias');
+                ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo']);
 
             if ($request->has('categoria')) {
                 $query->whereHas('categorias', function ($q) use ($request) {
@@ -600,8 +624,21 @@ class PrestadorController extends Controller
                 $query->where('nome', 'like', '%' . $request->busca . '%');
             }
 
-            // ✅ CORREÇÃO: Usar get() e toArray() para evitar problema de serialização
-            return $query->get()->map(function ($prestador) {
+            $prestadores = $query->limit(50)->get();
+            $prestadorIds = $prestadores->pluck('id');
+
+            // Buscar categorias - CORRIGIDO: usando 'user_id' em vez de 'prestador_id'
+            $categoriasPorPrestador = [];
+            if ($prestadorIds->isNotEmpty()) {
+                $categoriasPorPrestador = DB::table('prestador_categorias')
+                    ->whereIn('user_id', $prestadorIds)  // ← ALTERADO: user_id
+                    ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+                    ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')  // ← ALTERADO: user_id
+                    ->get()
+                    ->groupBy('user_id');  // ← ALTERADO: user_id
+            }
+
+            return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
                 return [
                     'id' => (int) $prestador->id,
                     'nome' => (string) $prestador->nome,
@@ -614,14 +651,14 @@ class PrestadorController extends Controller
                     'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
                     'verificado' => (bool) ($prestador->verificado ?? false),
                     'disponivel' => (bool) ($prestador->ativo ?? true),
-                    'categorias' => $prestador->categorias->map(function ($cat) {
-                        return [
-                            'id' => (int) $cat->id,
-                            'nome' => (string) $cat->nome,
-                        ];
-                    })->toArray(),
+                    'categorias' => isset($categoriasPorPrestador[$prestador->id])
+                        ? $categoriasPorPrestador[$prestador->id]->map(fn($c) => [
+                            'id' => (int) $c->id,
+                            'nome' => (string) $c->nome,
+                        ])->values()->toArray()
+                        : [],
                 ];
-            })->toArray();
+            })->values()->toArray();
         });
 
         return response()->json([
@@ -637,38 +674,74 @@ class PrestadorController extends Controller
     {
         $cacheKey = "prestador_detalhes_{$id}";
 
-        $dados = Cache::remember($cacheKey, 600, function () use ($id) {
+        $dados = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($id) {
             try {
-                $prestador = User::where('tipo', 'prestador')->find($id);
+                $prestador = User::where('tipo', 'prestador')
+                    ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo', 'created_at'])
+                    ->find($id);
 
                 if (!$prestador) {
                     return null;
                 }
 
-                $servicos = Servico::where('prestador_id', $id)->get()->toArray(); // ✅ CONVERTER PARA ARRAY
-                $categorias = $prestador->categorias()->get()->toArray(); // ✅ CONVERTER PARA ARRAY
-                $avaliacoes = Avaliacao::where('prestador_id', $id)
-                    ->with('cliente')
-                    ->orderBy('created_at', 'desc')
+                // Serviços
+                $servicos = Servico::where('prestador_id', $id)
+                    ->where('ativo', true)
+                    ->select(['id', 'nome', 'preco', 'duracao', 'descricao', 'icone'])
                     ->get()
-                    ->toArray(); // ✅ CONVERTER PARA ARRAY
+                    ->map(fn($servico) => [
+                        'id' => (int) $servico->id,
+                        'nome' => (string) $servico->nome,
+                        'preco' => (float) $servico->preco,
+                        'duracao' => (int) $servico->duracao,
+                        'descricao' => $servico->descricao,
+                        'icone' => (string) $servico->icone,
+                    ])->toArray();
+
+                // Categorias
+                $categorias = $prestador->categorias()
+                    ->select(['categorias.id', 'categorias.nome'])
+                    ->get()
+                    ->map(fn($cat) => [
+                        'id' => (int) $cat->id,
+                        'nome' => (string) $cat->nome,
+                    ])->toArray();
+
+                // Avaliações (apenas últimas 10)
+                $avaliacoes = Avaliacao::where('prestador_id', $id)
+                    ->with('cliente:id,nome,foto')
+                    ->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])
+                    ->orderBy('created_at', 'desc')
+                    ->limit(10)
+                    ->get()
+                    ->map(fn($avaliacao) => [
+                        'id' => (int) $avaliacao->id,
+                        'nota' => (int) $avaliacao->nota,
+                        'comentario' => $avaliacao->comentario,
+                        'created_at' => $avaliacao->created_at?->toISOString(),
+                        'cliente' => $avaliacao->cliente ? [
+                            'id' => (int) $avaliacao->cliente->id,
+                            'nome' => (string) $avaliacao->cliente->nome,
+                            'foto' => $avaliacao->cliente->foto ? asset('storage/' . $avaliacao->cliente->foto) : null,
+                        ] : null,
+                    ])->toArray();
 
                 return [
-                    'id' => $prestador->id,
-                    'nome' => $prestador->nome,
-                    'email' => $prestador->email,
-                    'telefone' => $prestador->telefone,
+                    'id' => (int) $prestador->id,
+                    'nome' => (string) $prestador->nome,
+                    'email' => (string) $prestador->email,
+                    'telefone' => (string) $prestador->telefone,
                     'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
-                    'profissao' => $prestador->profissao,
-                    'sobre' => $prestador->sobre,
-                    'media_avaliacao' => $prestador->media_avaliacao ?? 0,
-                    'total_avaliacoes' => $prestador->total_avaliacoes ?? 0,
-                    'verificado' => $prestador->verificado ?? false,
-                    'disponivel' => $prestador->ativo ?? true,
+                    'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
+                    'sobre' => $prestador->sobre ? (string) $prestador->sobre : null,
+                    'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                    'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                    'verificado' => (bool) ($prestador->verificado ?? false),
+                    'disponivel' => (bool) ($prestador->ativo ?? true),
                     'categorias' => $categorias,
                     'servicos' => $servicos,
                     'avaliacoes' => $avaliacoes,
-                    'created_at' => $prestador->created_at,
+                    'created_at' => $prestador->created_at?->toISOString(),
                 ];
             } catch (\Exception $e) {
                 Log::error('Erro ao buscar prestador ID ' . $id . ': ' . $e->getMessage());
@@ -690,46 +763,99 @@ class PrestadorController extends Controller
     }
 
     /**
-     * Prestadores em destaque (público) - ✅ CORRIGIDO COM TOARRAY
+     * Prestadores em destaque (público)
      * GET /api/prestadores/destaque
      */
     public function destaque()
     {
-        $prestadores = Cache::remember('prestadores_destaque', 3600, function () {
-            return User::where('tipo', 'prestador')
+        try {
+            $prestadores = User::where('tipo', 'prestador')
                 ->where('ativo', true)
+                ->select('id', 'nome', 'foto', 'profissao', 'media_avaliacao', 'total_avaliacoes', 'verificado')
                 ->orderBy('media_avaliacao', 'desc')
-                ->limit(10)
-                ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
-        });
+                ->limit(8)
+                ->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $prestadores
-        ]);
+            $result = $prestadores->map(function ($prestador) {
+                return [
+                    'id' => (int) $prestador->id,
+                    'nome' => (string) $prestador->nome,
+                    'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                    'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
+                    'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                    'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                    'verificado' => (bool) ($prestador->verificado ?? false),
+                    'categorias' => [],
+                ];
+            })->toArray();
+
+            return response()->json([
+                'success' => true,
+                'data' => $result
+            ]);
+        } catch (\Exception $e) {
+            error_log('Erro: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'data' => [],
+                'message' => 'Erro ao carregar prestadores em destaque'
+            ], 500);
+        }
     }
 
     /**
-     * Prestadores mais bem avaliados (público) - ✅ CORRIGIDO COM TOARRAY
+     * Prestadores mais bem avaliados (público)
      * GET /api/prestadores/top
      */
     public function topAvaliados()
-    {
-        $prestadores = Cache::remember('prestadores_top', 3600, function () {
-            return User::where('tipo', 'prestador')
-                ->where('ativo', true)
-                ->orderBy('media_avaliacao', 'desc')
-                ->limit(10)
-                ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
-        });
+{
+    $prestadores = Cache::remember('prestadores_top', self::CACHE_MEDIUM, function () {
+        $prestadores = User::where('tipo', 'prestador')
+            ->where('ativo', true)
+            ->where('media_avaliacao', '>=', 4)
+            ->select('id', 'nome', 'foto', 'profissao', 'media_avaliacao', 'total_avaliacoes', 'verificado')
+            ->orderByRaw('media_avaliacao DESC, total_avaliacoes DESC')
+            ->limit(10)
+            ->get();
 
-        return response()->json([
-            'success' => true,
-            'data' => $prestadores
-        ]);
-    }
+        if ($prestadores->isEmpty()) {
+            return [];
+        }
+
+        $prestadorIds = $prestadores->pluck('id');
+
+        // CORRIGIDO: usando 'user_id' em vez de 'prestador_id'
+        $categoriasPorPrestador = DB::table('prestador_categorias')
+            ->whereIn('user_id', $prestadorIds)  // ← ALTERADO: user_id
+            ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+            ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')  // ← ALTERADO: user_id
+            ->get()
+            ->groupBy('user_id');  // ← ALTERADO: user_id
+
+        return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
+            return [
+                'id' => (int) $prestador->id,
+                'nome' => (string) $prestador->nome,
+                'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
+                'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                'verificado' => (bool) ($prestador->verificado ?? false),
+                'categorias' => isset($categoriasPorPrestador[$prestador->id])
+                    ? $categoriasPorPrestador[$prestador->id]->map(fn($c) => [
+                        'id' => (int) $c->id,
+                        'nome' => (string) $c->nome
+                    ])->values()->toArray()
+                    : [],
+            ];
+        })->values()->toArray();
+    });
+
+    return response()->json([
+        'success' => true,
+        'data' => $prestadores
+    ]);
+}
 
     /**
      * Prestadores próximos (público)
@@ -737,9 +863,6 @@ class PrestadorController extends Controller
      */
     public function proximos(Request $request)
     {
-        $lat = $request->query('lat');
-        $lng = $request->query('lng');
-
         return response()->json([
             'success' => true,
             'data' => []
@@ -747,16 +870,12 @@ class PrestadorController extends Controller
     }
 
     /**
-     * Listar categorias (público) - ✅ CORRIGIDO COM TOARRAY
-     * GET /api/prestadores/categorias
-     */
-    /**
-     * Listar categorias públicas (via PrestadorController)
+     * Listar categorias (público)
      * GET /api/prestadores/categorias
      */
     public function categorias()
     {
-        $categorias = Cache::remember('prestador_categorias_publicas', 3600, function () {
+        $categorias = Cache::remember('prestador_categorias_publicas', self::CACHE_VERY_LONG, function () {
             return Categoria::where('ativo', true)
                 ->select('id', 'nome', 'slug', 'icone', 'cor', 'descricao')
                 ->orderBy('nome', 'asc')
@@ -791,9 +910,10 @@ class PrestadorController extends Controller
         $page = request()->query('page', 1);
         $cacheKey = "prestador_avaliacoes_{$id}_{$page}";
 
-        $avaliacoes = Cache::remember($cacheKey, 600, function () use ($id) {
+        $avaliacoes = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($id) {
             return Avaliacao::where('prestador_id', $id)
-                ->with('cliente')
+                ->with('cliente:id,nome,foto')
+                ->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])
                 ->orderBy('created_at', 'desc')
                 ->paginate(20);
         });
@@ -805,7 +925,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 8. FINANCEIRO DO PRESTADOR (OTIMIZADO)
+    // 8. FINANCEIRO DO PRESTADOR
     // ==========================================
 
     /**
@@ -817,7 +937,7 @@ class PrestadorController extends Controller
         $userId = $request->user()->id;
         $cacheKey = "prestador_ganhos_{$userId}";
 
-        $ganhos = Cache::remember($cacheKey, 300, function () use ($userId) {
+        $ganhos = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId) {
             $result = DB::table('pedidos')
                 ->where('prestador_id', $userId)
                 ->selectRaw("
@@ -851,12 +971,24 @@ class PrestadorController extends Controller
         $user = $request->user();
         $cacheKey = "prestador_saques_{$user->id}";
 
-        $saques = Cache::remember($cacheKey, 300, function () use ($user) {
+        $saques = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user) {
             return Transacao::where('user_id', $user->id)
                 ->where('tipo', 'saque')
+                ->select(['id', 'numero', 'valor', 'status', 'metodo', 'descricao', 'created_at'])
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->map(function ($saque) {
+                    return [
+                        'id' => (int) $saque->id,
+                        'numero' => (string) $saque->numero,
+                        'valor' => (float) $saque->valor,
+                        'status' => (string) $saque->status,
+                        'metodo' => (string) $saque->metodo,
+                        'descricao' => $saque->descricao,
+                        'created_at' => $saque->created_at?->toISOString(),
+                    ];
+                })
+                ->toArray();
         });
 
         return response()->json([
@@ -916,8 +1048,7 @@ class PrestadorController extends Controller
                 'detalhes' => json_encode(['conta' => $request->conta]),
             ]);
 
-            Cache::forget("prestador_saques_{$user->id}");
-            Cache::forget("prestador_ganhos_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -943,7 +1074,7 @@ class PrestadorController extends Controller
         $page = $request->query('page', 1);
         $cacheKey = "prestador_historico_saques_{$user->id}_{$page}";
 
-        $saques = Cache::remember($cacheKey, 300, function () use ($user) {
+        $saques = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user) {
             return Transacao::where('user_id', $user->id)
                 ->where('tipo', 'saque')
                 ->orderBy('created_at', 'desc')
@@ -957,7 +1088,7 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 9. PRÓXIMOS SERVIÇOS E AVALIAÇÕES RECENTES (OTIMIZADO)
+    // 9. PRÓXIMOS SERVIÇOS E AVALIAÇÕES RECENTES
     // ==========================================
 
     /**
@@ -967,40 +1098,41 @@ class PrestadorController extends Controller
     public function proximosServicos(Request $request)
     {
         $userId = $request->user()->id;
-        $limit = $request->query('limit', 5);
+        $limit = min($request->query('limit', 5), 20);
         $cacheKey = "prestador_proximos_servicos_{$userId}_{$limit}";
 
-        $servicos = Cache::remember($cacheKey, 180, function () use ($userId, $limit) {
+        $servicos = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId, $limit) {
             return Pedido::where('prestador_id', $userId)
                 ->whereIn('status', ['aceito', 'confirmado', 'em_andamento'])
                 ->whereDate('data', '>=', now())
                 ->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco'])
+                ->select(['id', 'numero', 'data', 'endereco', 'status', 'valor', 'observacoes', 'cliente_id', 'servico_id'])
                 ->orderBy('data', 'asc')
                 ->limit($limit)
                 ->get()
                 ->map(function ($pedido) {
                     return [
-                        'id' => $pedido->id,
-                        'numero' => $pedido->numero,
-                        'cliente' => [
-                            'id' => $pedido->cliente->id,
-                            'nome' => $pedido->cliente->nome,
+                        'id' => (int) $pedido->id,
+                        'numero' => (string) $pedido->numero,
+                        'cliente' => $pedido->cliente ? [
+                            'id' => (int) $pedido->cliente->id,
+                            'nome' => (string) $pedido->cliente->nome,
                             'foto' => $pedido->cliente->foto ? asset('storage/' . $pedido->cliente->foto) : null,
-                            'telefone' => $pedido->cliente->telefone,
-                        ],
-                        'servico' => [
-                            'id' => $pedido->servico->id,
-                            'nome' => $pedido->servico->nome,
-                            'preco' => $pedido->servico->preco,
-                        ],
-                        'data' => $pedido->data,
-                        'endereco' => $pedido->endereco,
-                        'status' => $pedido->status,
-                        'valor' => $pedido->valor,
+                            'telefone' => (string) $pedido->cliente->telefone,
+                        ] : null,
+                        'servico' => $pedido->servico ? [
+                            'id' => (int) $pedido->servico->id,
+                            'nome' => (string) $pedido->servico->nome,
+                            'preco' => (float) $pedido->servico->preco,
+                        ] : null,
+                        'data' => $pedido->data ? (string) $pedido->data : null,
+                        'endereco' => (string) $pedido->endereco,
+                        'status' => (string) $pedido->status,
+                        'valor' => (float) ($pedido->valor ?? 0),
                         'observacoes' => $pedido->observacoes,
                     ];
                 })
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -1016,29 +1148,30 @@ class PrestadorController extends Controller
     public function avaliacoesRecentes(Request $request)
     {
         $userId = $request->user()->id;
-        $limit = $request->query('limit', 5);
+        $limit = min($request->query('limit', 5), 20);
         $cacheKey = "prestador_avaliacoes_recentes_{$userId}_{$limit}";
 
-        $avaliacoes = Cache::remember($cacheKey, 300, function () use ($userId, $limit) {
+        $avaliacoes = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId, $limit) {
             return Avaliacao::where('prestador_id', $userId)
                 ->with('cliente:id,nome,foto')
+                ->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])
                 ->orderBy('created_at', 'desc')
                 ->limit($limit)
                 ->get()
                 ->map(function ($avaliacao) {
                     return [
-                        'id' => $avaliacao->id,
-                        'nota' => $avaliacao->nota,
+                        'id' => (int) $avaliacao->id,
+                        'nota' => (int) $avaliacao->nota,
                         'comentario' => $avaliacao->comentario,
-                        'created_at' => $avaliacao->created_at,
-                        'cliente' => [
-                            'id' => $avaliacao->cliente->id,
-                            'nome' => $avaliacao->cliente->nome,
+                        'created_at' => $avaliacao->created_at?->toISOString(),
+                        'cliente' => $avaliacao->cliente ? [
+                            'id' => (int) $avaliacao->cliente->id,
+                            'nome' => (string) $avaliacao->cliente->nome,
                             'foto' => $avaliacao->cliente->foto ? asset('storage/' . $avaliacao->cliente->foto) : null,
-                        ],
+                        ] : null,
                     ];
                 })
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -1060,11 +1193,22 @@ class PrestadorController extends Controller
         $user = $request->user();
         $cacheKey = "prestador_intervalos_{$user->id}";
 
-        $intervalos = Cache::remember($cacheKey, 300, function () use ($user) {
+        $intervalos = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             return PrestadorIntervalo::where('prestador_id', $user->id)
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->map(function ($intervalo) {
+                    return [
+                        'id' => (int) $intervalo->id,
+                        'dias' => $intervalo->dias,
+                        'inicio' => (string) $intervalo->inicio,
+                        'fim' => (string) $intervalo->fim,
+                        'descricao' => $intervalo->descricao,
+                        'ativo' => (bool) $intervalo->ativo,
+                        'created_at' => $intervalo->created_at?->toISOString(),
+                    ];
+                })
+                ->toArray();
         });
 
         return response()->json([
@@ -1106,7 +1250,7 @@ class PrestadorController extends Controller
                 'ativo' => true,
             ]);
 
-            Cache::forget("prestador_intervalos_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -1114,6 +1258,7 @@ class PrestadorController extends Controller
                 'data' => $intervalo
             ], 201);
         } catch (\Exception $e) {
+            Log::error('Erro ao criar intervalo: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao criar intervalo'
@@ -1161,8 +1306,7 @@ class PrestadorController extends Controller
             if ($request->has('ativo')) $intervalo->ativo = $request->ativo;
 
             $intervalo->save();
-
-            Cache::forget("prestador_intervalos_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -1170,6 +1314,7 @@ class PrestadorController extends Controller
                 'data' => $intervalo
             ]);
         } catch (\Exception $e) {
+            Log::error('Erro ao atualizar intervalo: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao atualizar intervalo'
@@ -1194,8 +1339,7 @@ class PrestadorController extends Controller
         }
 
         $intervalo->delete();
-
-        Cache::forget("prestador_intervalos_{$user->id}");
+        $this->clearPrestadorCache($user->id);
 
         return response()->json([
             'success' => true,
@@ -1208,7 +1352,7 @@ class PrestadorController extends Controller
     // ==========================================
 
     /**
-     * Obter configurações de disponibilidade do prestador
+     * Obter configurações de disponibilidade
      * GET /api/prestador/disponibilidade
      */
     public function getDisponibilidade(Request $request)
@@ -1216,7 +1360,7 @@ class PrestadorController extends Controller
         $user = $request->user();
         $cacheKey = "prestador_disponibilidade_{$user->id}";
 
-        $disponibilidade = Cache::remember($cacheKey, 3600, function () use ($user) {
+        $disponibilidade = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             $disponibilidade = PrestadorDisponibilidade::where('prestador_id', $user->id)->first();
 
             if (!$disponibilidade) {
@@ -1250,11 +1394,6 @@ class PrestadorController extends Controller
             'configuracoes' => 'sometimes|array',
             'horarios_padrao' => 'sometimes|array',
             'intervalos_padrao' => 'sometimes|array',
-            'configuracoes.tempo_minimo_agendamento' => 'sometimes|integer|min:15|max:1440',
-            'configuracoes.tempo_entre_servicos' => 'sometimes|integer|min:0|max:120',
-            'configuracoes.notificar_antes' => 'sometimes|integer|min:5|max:1440',
-            'configuracoes.aceitar_agendamento_automatico' => 'sometimes|boolean',
-            'configuracoes.dias_antecedencia' => 'sometimes|integer|min:1|max:365',
         ]);
 
         if ($validator->fails()) {
@@ -1273,24 +1412,20 @@ class PrestadorController extends Controller
             }
 
             if ($request->has('configuracoes')) {
-                $configuracoes = array_merge(
+                $disponibilidade->configuracoes = array_merge(
                     PrestadorDisponibilidade::getDefaultConfiguracoes(),
                     $request->configuracoes
                 );
-                $disponibilidade->configuracoes = $configuracoes;
             }
-
             if ($request->has('horarios_padrao')) {
                 $disponibilidade->horarios_padrao = $request->horarios_padrao;
             }
-
             if ($request->has('intervalos_padrao')) {
                 $disponibilidade->intervalos_padrao = $request->intervalos_padrao;
             }
 
             $disponibilidade->save();
-
-            Cache::forget("prestador_disponibilidade_{$user->id}");
+            $this->clearPrestadorCache($user->id);
 
             return response()->json([
                 'success' => true,
@@ -1298,6 +1433,7 @@ class PrestadorController extends Controller
                 'data' => $disponibilidade
             ]);
         } catch (\Exception $e) {
+            Log::error('Erro ao atualizar configurações: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao atualizar configurações'
@@ -1323,7 +1459,9 @@ class PrestadorController extends Controller
             "prestador_saques_{$userId}",
             "prestador_categorias_{$userId}",
             "prestador_proximos_servicos_{$userId}_5",
+            "prestador_proximos_servicos_{$userId}_10",
             "prestador_avaliacoes_recentes_{$userId}_5",
+            "prestador_avaliacoes_recentes_{$userId}_10",
         ];
 
         foreach ($keys as $key) {
@@ -1341,6 +1479,11 @@ class PrestadorController extends Controller
         for ($page = 1; $page <= 3; $page++) {
             Cache::forget("prestador_historico_saques_{$userId}_{$page}");
         }
+
+        // Limpar caches públicos
+        Cache::forget('prestadores_destaque');
+        Cache::forget('prestadores_top');
+        Cache::forget('prestador_categorias_publicas');
     }
 
     /**
@@ -1355,6 +1498,20 @@ class PrestadorController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Cache limpo com sucesso'
+        ]);
+    }
+
+    /**
+     * Endpoint para verificar saúde do sistema
+     * GET /api/prestador/health
+     */
+    public function health()
+    {
+        return response()->json([
+            'success' => true,
+            'message' => 'API funcionando',
+            'timestamp' => now()->toISOString(),
+            'cache_driver' => config('cache.default')
         ]);
     }
 }

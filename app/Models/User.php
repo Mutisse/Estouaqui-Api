@@ -28,7 +28,6 @@ class User extends Authenticatable
         'total_avaliacoes',
         'blocked_at',
         'preferences',
-        // ✅ PROPRIEDADES DE LOCALIZAÇÃO
         'raio',
         'latitude',
         'longitude',
@@ -48,7 +47,6 @@ class User extends Authenticatable
         'blocked_at' => 'datetime',
         'preferences' => 'array',
         'media_avaliacao' => 'decimal:1',
-        // ✅ CASTS DE LOCALIZAÇÃO
         'raio' => 'integer',
         'latitude' => 'decimal:8',
         'longitude' => 'decimal:8',
@@ -105,15 +103,7 @@ class User extends Authenticatable
      */
     public function categorias()
     {
-        return $this->belongsToMany(Categoria::class, 'prestador_categorias');
-    }
-
-    /**
-     * Tipos de serviço que o prestador oferece
-     */
-    public function servicoTipos()
-    {
-        return $this->belongsToMany(ServicoTipo::class, 'prestador_servico_tipos', 'prestador_id', 'servico_tipo_id');
+        return $this->belongsToMany(Categoria::class, 'prestador_categorias', 'user_id', 'categoria_id');
     }
 
     /**
@@ -130,6 +120,14 @@ class User extends Authenticatable
     public function pedidosPrestador()
     {
         return $this->hasMany(Pedido::class, 'prestador_id');
+    }
+
+    /**
+     * Propostas feitas pelo prestador
+     */
+    public function propostas()
+    {
+        return $this->hasMany(Proposta::class, 'prestador_id');
     }
 
     /**
@@ -239,9 +237,6 @@ class User extends Authenticatable
     // MÉTODOS DE LOCALIZAÇÃO
     // ==========================================
 
-    /**
-     * Definir localização
-     */
     public function setLocationAttribute($value)
     {
         if (is_array($value) && isset($value['latitude'], $value['longitude'])) {
@@ -250,9 +245,6 @@ class User extends Authenticatable
         }
     }
 
-    /**
-     * Calcular distância até um ponto (em km) usando a fórmula de Haversine
-     */
     public function distanceTo($latitude, $longitude)
     {
         if ($this->latitude && $this->longitude) {
@@ -265,15 +257,12 @@ class User extends Authenticatable
             $cos = sin($lat1) * sin($lat2) + cos($lat1) * cos($lat2) * cos($delta);
             $angle = acos($cos);
 
-            return $angle * 6371; // Raio da Terra em km
+            return $angle * 6371;
         }
 
         return null;
     }
 
-    /**
-     * Escopo para prestadores próximos (usando a fórmula de Haversine)
-     */
     public function scopeNearby($query, $latitude, $longitude, $radius = 10)
     {
         return $query->whereRaw(
@@ -288,9 +277,6 @@ class User extends Authenticatable
         );
     }
 
-    /**
-     * Escopo para prestadores dentro do raio de atendimento
-     */
     public function scopeWithinRadius($query, $latitude, $longitude)
     {
         return $query->whereRaw(
@@ -305,9 +291,6 @@ class User extends Authenticatable
         );
     }
 
-    /**
-     * Escopo para usuários com localização definida
-     */
     public function scopeHasLocation($query)
     {
         return $query->whereNotNull('latitude')->whereNotNull('longitude');

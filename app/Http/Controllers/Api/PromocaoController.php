@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 
 class PromocaoController extends Controller
 {
@@ -18,7 +19,11 @@ class PromocaoController extends Controller
     public function index(Request $request)
     {
         try {
-            $promocoes = Cache::remember('promocoes_all', 300, function () {
+            $startTime = microtime(true);
+
+            $promocoes = Cache::remember('promocoes_all', 3600, function () {
+                Log::info('Cache MISS: Carregando todas as promoções do banco');
+
                 return Promocao::orderBy('created_at', 'desc')
                     ->limit(50)
                     ->get()
@@ -27,6 +32,9 @@ class PromocaoController extends Controller
                     })
                     ->toArray();
             });
+
+            $executionTime = (microtime(true) - $startTime) * 1000;
+            Log::info("Promoções index carregadas em: {$executionTime}ms");
 
             return response()->json([
                 'success' => true,
@@ -43,15 +51,36 @@ class PromocaoController extends Controller
     }
 
     /**
-     * Listar promoções ativas
+     * Listar promoções ativas (OTIMIZADO)
      * GET /api/promocoes/ativas
      */
     public function ativas(Request $request)
     {
         try {
-            $promocoes = Cache::remember('promocoes_ativas', 300, function () {
-                return Promocao::where('ativo', 1)
+            $startTime = microtime(true);
+
+            // Cache por 1 hora (3600 segundos) em vez de 5 minutos
+            $promocoes = Cache::remember('promocoes_ativas', 3600, function () {
+                Log::info('Cache MISS: Carregando promoções ativas do banco');
+
+                // Query otimizada com select específico
+                return Promocao::select([
+                    'id',
+                    'codigo',
+                    'titulo',
+                    'descricao',
+                    'tipo_desconto',
+                    'valor_desconto',
+                    'valor_minimo',
+                    'validade',
+                    'ativo',
+                    'imagem',
+                    'created_at',
+                    'updated_at'
+                ])
+                    ->where('ativo', 1)
                     ->whereDate('validade', '>=', now()->toDateString())
+                    ->orderByRaw('CASE WHEN created_at IS NULL THEN 1 ELSE 0 END')
                     ->orderBy('created_at', 'desc')
                     ->limit(10)
                     ->get()
@@ -61,9 +90,20 @@ class PromocaoController extends Controller
                     ->toArray();
             });
 
+            $executionTime = (microtime(true) - $startTime) * 1000;
+
+            // Log apenas se for muito lento (> 500ms)
+            if ($executionTime > 500) {
+                Log::warning("Promoções ativas lentas: {$executionTime}ms");
+            }
+
             return response()->json([
                 'success' => true,
-                'data' => $promocoes
+                'data' => $promocoes,
+                'meta' => [
+                    'execution_time_ms' => round($executionTime, 2),
+                    'cached' => Cache::has('promocoes_ativas')
+                ]
             ]);
         } catch (\Exception $e) {
             Log::error('Erro ao listar promoções ativas: ' . $e->getMessage());
@@ -82,9 +122,11 @@ class PromocaoController extends Controller
     public function show($id)
     {
         try {
+            $startTime = microtime(true);
             $cacheKey = "promocao_{$id}";
 
-            $promocao = Cache::remember($cacheKey, 300, function () use ($id) {
+            $promocao = Cache::remember($cacheKey, 3600, function () use ($id) {
+                Log::info("Cache MISS: Carregando promoção ID: {$id}");
                 return Promocao::find($id);
             });
 
@@ -95,9 +137,14 @@ class PromocaoController extends Controller
                 ], 404);
             }
 
+            $executionTime = (microtime(true) - $startTime) * 1000;
+
             return response()->json([
                 'success' => true,
-                'data' => $this->formatPromocao($promocao)
+                'data' => $this->formatPromocao($promocao),
+                'meta' => [
+                    'execution_time_ms' => round($executionTime, 2)
+                ]
             ]);
         } catch (\Exception $e) {
             Log::error('Erro ao buscar promoção: ' . $e->getMessage());
@@ -115,9 +162,12 @@ class PromocaoController extends Controller
     public function showByCodigo($codigo)
     {
         try {
+            $startTime = microtime(true);
             $cacheKey = "promocao_codigo_" . strtoupper($codigo);
 
-            $promocao = Cache::remember($cacheKey, 300, function () use ($codigo) {
+            $promocao = Cache::remember($cacheKey, 3600, function () use ($codigo) {
+                Log::info("Cache MISS: Buscando promoção por código: {$codigo}");
+
                 return Promocao::where('codigo', strtoupper($codigo))
                     ->where('ativo', 1)
                     ->whereDate('validade', '>=', now()->toDateString())
@@ -131,9 +181,14 @@ class PromocaoController extends Controller
                 ], 404);
             }
 
+            $executionTime = (microtime(true) - $startTime) * 1000;
+
             return response()->json([
                 'success' => true,
-                'data' => $this->formatPromocao($promocao)
+                'data' => $this->formatPromocao($promocao),
+                'meta' => [
+                    'execution_time_ms' => round($executionTime, 2)
+                ]
             ]);
         } catch (\Exception $e) {
             Log::error('Erro ao buscar promoção por código: ' . $e->getMessage());
@@ -151,6 +206,8 @@ class PromocaoController extends Controller
     public function validarCupom(Request $request)
     {
         try {
+            $startTime = microtime(true);
+
             $validator = Validator::make($request->all(), [
                 'codigo' => 'required|string|max:50',
                 'total' => 'nullable|numeric|min:0',
@@ -163,9 +220,13 @@ class PromocaoController extends Controller
                 ], 422);
             }
 
-            $promocao = Promocao::where('codigo', strtoupper($request->codigo))
-                ->where('ativo', 1)
-                ->first();
+            // Usar cache para buscar o cupom
+            $cacheKey = 'cupom_validacao_' . strtoupper($request->codigo);
+            $promocao = Cache::remember($cacheKey, 300, function () use ($request) {
+                return Promocao::where('codigo', strtoupper($request->codigo))
+                    ->where('ativo', 1)
+                    ->first();
+            });
 
             if (!$promocao) {
                 return response()->json([
@@ -201,6 +262,8 @@ class PromocaoController extends Controller
                 $desconto = min($desconto, $valorPedido);
             }
 
+            $executionTime = (microtime(true) - $startTime) * 1000;
+
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -215,6 +278,9 @@ class PromocaoController extends Controller
                     'valor_minimo' => (float) $promocao->valor_minimo,
                     'validade' => (string) $promocao->validade,
                     'novo_total' => round($valorPedido - $desconto, 2),
+                ],
+                'meta' => [
+                    'execution_time_ms' => round($executionTime, 2)
                 ]
             ]);
         } catch (\Exception $e) {
@@ -377,6 +443,98 @@ class PromocaoController extends Controller
     }
 
     /**
+     * Endpoint para verificar saúde do cache
+     * GET /api/promocoes/cache-status
+     */
+    public function cacheStatus()
+    {
+        try {
+            $cacheKeys = [
+                'promocoes_ativas',
+                'promocoes_all',
+                'promocoes_ativas_v2'
+            ];
+
+            $status = [];
+            foreach ($cacheKeys as $key) {
+                $status[$key] = [
+                    'exists' => Cache::has($key),
+                    'ttl' => Cache::has($key) ? 'active' : 'expired'
+                ];
+            }
+
+            // Contar promoções no banco
+            $totalPromocoes = Promocao::count();
+            $ativasCount = Promocao::where('ativo', 1)
+                ->whereDate('validade', '>=', now())
+                ->count();
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'cache_status' => $status,
+                    'database_stats' => [
+                        'total_promocoes' => $totalPromocoes,
+                        'ativas' => $ativasCount,
+                        'expiradas' => $totalPromocoes - $ativasCount
+                    ],
+                    'cache_driver' => config('cache.default'),
+                    'recommendations' => $this->getRecommendations()
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Endpoint para forçar recarga do cache (admin)
+     * POST /api/admin/promocoes/reload-cache
+     */
+    public function reloadCache()
+    {
+        try {
+            $startTime = microtime(true);
+
+            // Limpar cache existente
+            $this->clearPromocaoCache();
+
+            // Forçar recarga do cache
+            $promocoes = Promocao::where('ativo', 1)
+                ->whereDate('validade', '>=', now()->toDateString())
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get()
+                ->map(function ($promocao) {
+                    return $this->formatPromocao($promocao);
+                })
+                ->toArray();
+
+            Cache::put('promocoes_ativas', $promocoes, 3600);
+
+            $executionTime = (microtime(true) - $startTime) * 1000;
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Cache recarregado com sucesso',
+                'meta' => [
+                    'items_loaded' => count($promocoes),
+                    'execution_time_ms' => round($executionTime, 2)
+                ]
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao recarregar cache: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao recarregar cache: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * Formatar promoção para JSON com casts corretos
      */
     private function formatPromocao($promocao): array
@@ -406,12 +564,47 @@ class PromocaoController extends Controller
      */
     private function clearPromocaoCache(): void
     {
-        Cache::forget('promocoes_all');
-        Cache::forget('promocoes_ativas');
+        $keys = [
+            'promocoes_all',
+            'promocoes_ativas',
+            'promocoes_ativas_v2',
+            'promocoes_count'
+        ];
+
+        foreach ($keys as $key) {
+            Cache::forget($key);
+        }
 
         // Limpar cache de páginas
         for ($page = 1; $page <= 5; $page++) {
             Cache::forget("promocoes_page_{$page}");
         }
+
+        Log::info('Cache de promoções limpo');
+    }
+
+    /**
+     * Obter recomendações de otimização
+     */
+    private function getRecommendations(): array
+    {
+        $recommendations = [];
+
+        // Verificar driver de cache
+        if (config('cache.default') === 'file') {
+            $recommendations[] = 'Considere usar Redis ou Memcached para melhor performance';
+        }
+
+        // Verificar índices no banco
+        try {
+            $hasIndex = DB::select("SHOW INDEX FROM promocoes WHERE Key_name = 'idx_promocoes_ativo_validade'");
+            if (empty($hasIndex)) {
+                $recommendations[] = 'Adicione índice: CREATE INDEX idx_promocoes_ativo_validade ON promocoes(ativo, validade)';
+            }
+        } catch (\Exception $e) {
+            $recommendations[] = 'Verifique os índices da tabela promocoes';
+        }
+
+        return $recommendations;
     }
 }
