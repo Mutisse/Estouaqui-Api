@@ -356,6 +356,10 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{id}', [CategoriaController::class, 'show']);
             Route::put('/{id}', [CategoriaController::class, 'update']);
             Route::delete('/{id}', [CategoriaController::class, 'destroy']);
+
+            // NOVAS ROTAS PARA IMAGEM
+            Route::post('/upload-imagem', [CategoriaController::class, 'uploadImagem']);
+            Route::delete('/{id}/imagem', [CategoriaController::class, 'removerImagem']);
         });
 
         // Gestão de serviços

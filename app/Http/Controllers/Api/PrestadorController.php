@@ -29,7 +29,7 @@ class PrestadorController extends Controller
     private const CACHE_VERY_LONG = 86400; // 24 horas
 
     // ==========================================
-    // 1. REGISTRO DO PRESTADOR
+    // 1. REGISTRO DO PRESTADOR - CORRIGIDO
     // ==========================================
 
     /**
@@ -55,6 +55,9 @@ class PrestadorController extends Controller
             'portfolio.0' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
             'portfolio.1' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
             'portfolio.2' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
+            // ✅ ADICIONAR LATITUDE E LONGITUDE
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
         ]);
 
         if ($validator->fails()) {
@@ -84,6 +87,9 @@ class PrestadorController extends Controller
                 'tipo' => 'prestador',
                 'profissao' => $request->profissao ?? 'Prestador de Serviços',
                 'sobre' => $request->sobre ?? $request->descricao,
+                // ✅ ADICIONAR LATITUDE E LONGITUDE
+                'latitude' => $request->latitude,
+                'longitude' => $request->longitude,
                 'preferences' => json_encode([
                     'descricao' => $request->descricao,
                     'categorias' => json_decode($request->categorias, true),
@@ -116,6 +122,8 @@ class PrestadorController extends Controller
                     'telefone' => $user->telefone,
                     'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
                     'profissao' => $user->profissao,
+                    'latitude' => $user->latitude,
+                    'longitude' => $user->longitude,
                 ],
                 'token' => $token
             ], 201);
@@ -627,15 +635,14 @@ class PrestadorController extends Controller
             $prestadores = $query->limit(50)->get();
             $prestadorIds = $prestadores->pluck('id');
 
-            // Buscar categorias - CORRIGIDO: usando 'user_id' em vez de 'prestador_id'
             $categoriasPorPrestador = [];
             if ($prestadorIds->isNotEmpty()) {
                 $categoriasPorPrestador = DB::table('prestador_categorias')
-                    ->whereIn('user_id', $prestadorIds)  // ← ALTERADO: user_id
+                    ->whereIn('user_id', $prestadorIds)
                     ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
-                    ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')  // ← ALTERADO: user_id
+                    ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')
                     ->get()
-                    ->groupBy('user_id');  // ← ALTERADO: user_id
+                    ->groupBy('user_id');
             }
 
             return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
@@ -666,6 +673,7 @@ class PrestadorController extends Controller
             'data' => $prestadores
         ]);
     }
+
     /**
      * Detalhes do prestador (público)
      * GET /api/prestadores/{id}
@@ -684,7 +692,6 @@ class PrestadorController extends Controller
                     return null;
                 }
 
-                // Serviços
                 $servicos = Servico::where('prestador_id', $id)
                     ->where('ativo', true)
                     ->select(['id', 'nome', 'preco', 'duracao', 'descricao', 'icone'])
@@ -698,7 +705,6 @@ class PrestadorController extends Controller
                         'icone' => (string) $servico->icone,
                     ])->toArray();
 
-                // Categorias
                 $categorias = $prestador->categorias()
                     ->select(['categorias.id', 'categorias.nome'])
                     ->get()
@@ -707,7 +713,6 @@ class PrestadorController extends Controller
                         'nome' => (string) $cat->nome,
                     ])->toArray();
 
-                // Avaliações (apenas últimas 10)
                 $avaliacoes = Avaliacao::where('prestador_id', $id)
                     ->with('cliente:id,nome,foto')
                     ->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])
@@ -808,54 +813,53 @@ class PrestadorController extends Controller
      * GET /api/prestadores/top
      */
     public function topAvaliados()
-{
-    $prestadores = Cache::remember('prestadores_top', self::CACHE_MEDIUM, function () {
-        $prestadores = User::where('tipo', 'prestador')
-            ->where('ativo', true)
-            ->where('media_avaliacao', '>=', 4)
-            ->select('id', 'nome', 'foto', 'profissao', 'media_avaliacao', 'total_avaliacoes', 'verificado')
-            ->orderByRaw('media_avaliacao DESC, total_avaliacoes DESC')
-            ->limit(10)
-            ->get();
+    {
+        $prestadores = Cache::remember('prestadores_top', self::CACHE_MEDIUM, function () {
+            $prestadores = User::where('tipo', 'prestador')
+                ->where('ativo', true)
+                ->where('media_avaliacao', '>=', 4)
+                ->select('id', 'nome', 'foto', 'profissao', 'media_avaliacao', 'total_avaliacoes', 'verificado')
+                ->orderByRaw('media_avaliacao DESC, total_avaliacoes DESC')
+                ->limit(10)
+                ->get();
 
-        if ($prestadores->isEmpty()) {
-            return [];
-        }
+            if ($prestadores->isEmpty()) {
+                return [];
+            }
 
-        $prestadorIds = $prestadores->pluck('id');
+            $prestadorIds = $prestadores->pluck('id');
 
-        // CORRIGIDO: usando 'user_id' em vez de 'prestador_id'
-        $categoriasPorPrestador = DB::table('prestador_categorias')
-            ->whereIn('user_id', $prestadorIds)  // ← ALTERADO: user_id
-            ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
-            ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')  // ← ALTERADO: user_id
-            ->get()
-            ->groupBy('user_id');  // ← ALTERADO: user_id
+            $categoriasPorPrestador = DB::table('prestador_categorias')
+                ->whereIn('user_id', $prestadorIds)
+                ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+                ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')
+                ->get()
+                ->groupBy('user_id');
 
-        return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
-            return [
-                'id' => (int) $prestador->id,
-                'nome' => (string) $prestador->nome,
-                'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
-                'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
-                'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
-                'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
-                'verificado' => (bool) ($prestador->verificado ?? false),
-                'categorias' => isset($categoriasPorPrestador[$prestador->id])
-                    ? $categoriasPorPrestador[$prestador->id]->map(fn($c) => [
-                        'id' => (int) $c->id,
-                        'nome' => (string) $c->nome
-                    ])->values()->toArray()
-                    : [],
-            ];
-        })->values()->toArray();
-    });
+            return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
+                return [
+                    'id' => (int) $prestador->id,
+                    'nome' => (string) $prestador->nome,
+                    'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                    'profissao' => $prestador->profissao ? (string) $prestador->profissao : null,
+                    'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                    'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                    'verificado' => (bool) ($prestador->verificado ?? false),
+                    'categorias' => isset($categoriasPorPrestador[$prestador->id])
+                        ? $categoriasPorPrestador[$prestador->id]->map(fn($c) => [
+                            'id' => (int) $c->id,
+                            'nome' => (string) $c->nome
+                        ])->values()->toArray()
+                        : [],
+                ];
+            })->values()->toArray();
+        });
 
-    return response()->json([
-        'success' => true,
-        'data' => $prestadores
-    ]);
-}
+        return response()->json([
+            'success' => true,
+            'data' => $prestadores
+        ]);
+    }
 
     /**
      * Prestadores próximos (público)
@@ -1480,7 +1484,6 @@ class PrestadorController extends Controller
             Cache::forget("prestador_historico_saques_{$userId}_{$page}");
         }
 
-        // Limpar caches públicos
         Cache::forget('prestadores_destaque');
         Cache::forget('prestadores_top');
         Cache::forget('prestador_categorias_publicas');

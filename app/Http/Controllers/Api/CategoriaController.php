@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
 
 class CategoriaController extends Controller
 {
@@ -19,7 +20,7 @@ class CategoriaController extends Controller
     {
         $cacheKey = 'admin_categorias_' . md5($request->fullUrl());
 
-        $categorias = Cache::remember($cacheKey, 600, function() use ($request) {
+        $categorias = Cache::remember($cacheKey, 600, function () use ($request) {
             $query = Categoria::query();
 
             if ($request->has('ativo')) {
@@ -32,7 +33,7 @@ class CategoriaController extends Controller
                 ->map(function ($categoria) {
                     return $this->formatCategoria($categoria);
                 })
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -47,7 +48,7 @@ class CategoriaController extends Controller
      */
     public function publicas()
     {
-        $categorias = Cache::remember('categorias_publicas', 3600, function() {
+        $categorias = Cache::remember('categorias_publicas', 3600, function () {
             return Categoria::where('ativo', true)
                 ->withCount('servicos')
                 ->orderBy('nome', 'asc')
@@ -55,7 +56,7 @@ class CategoriaController extends Controller
                 ->map(function ($categoria) {
                     return $this->formatCategoria($categoria);
                 })
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -75,6 +76,7 @@ class CategoriaController extends Controller
             'descricao' => 'nullable|string',
             'icone' => 'nullable|string',
             'cor' => 'nullable|string',
+            'imagem_url' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -91,12 +93,12 @@ class CategoriaController extends Controller
                 'descricao' => $request->descricao,
                 'icone' => $request->icone ?? 'category',
                 'cor' => $request->cor ?? 'primary',
+                'imagem_url' => $request->imagem_url,
                 'ativo' => true,
             ]);
 
             $this->clearCategoriaCache();
 
-            // ✅ RETORNAR ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria criada com sucesso',
@@ -118,8 +120,8 @@ class CategoriaController extends Controller
     {
         $cacheKey = "categoria_{$id}";
 
-        $categoria = Cache::remember($cacheKey, 3600, function() use ($id) {
-            return Categoria::with(['servicos' => function($query) {
+        $categoria = Cache::remember($cacheKey, 3600, function () use ($id) {
+            return Categoria::with(['servicos' => function ($query) {
                 $query->select('id', 'nome', 'preco', 'duracao', 'categoria_id');
             }])->find($id);
         });
@@ -131,7 +133,6 @@ class CategoriaController extends Controller
             ], 404);
         }
 
-        // ✅ RETORNAR ARRAY COM CASTS
         return response()->json([
             'success' => true,
             'data' => $this->formatCategoria($categoria, true)
@@ -158,6 +159,7 @@ class CategoriaController extends Controller
             'descricao' => 'nullable|string',
             'icone' => 'nullable|string',
             'cor' => 'nullable|string',
+            'imagem_url' => 'nullable|string',
             'ativo' => 'sometimes|boolean',
         ]);
 
@@ -169,6 +171,11 @@ class CategoriaController extends Controller
         }
 
         try {
+            // Se houver nova imagem e existir imagem antiga, remover a antiga
+            if ($request->has('imagem_url') && $categoria->imagem_url && $request->imagem_url !== $categoria->imagem_url) {
+                $this->deleteImagemArquivo($categoria->imagem_url);
+            }
+
             if ($request->has('nome')) {
                 $categoria->nome = $request->nome;
                 $categoria->slug = Str::slug($request->nome);
@@ -176,13 +183,13 @@ class CategoriaController extends Controller
             if ($request->has('descricao')) $categoria->descricao = $request->descricao;
             if ($request->has('icone')) $categoria->icone = $request->icone;
             if ($request->has('cor')) $categoria->cor = $request->cor;
+            if ($request->has('imagem_url')) $categoria->imagem_url = $request->imagem_url;
             if ($request->has('ativo')) $categoria->ativo = $request->ativo;
 
             $categoria->save();
 
             $this->clearCategoriaCache();
 
-            // ✅ RETORNAR ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Categoria atualizada com sucesso',
@@ -211,6 +218,11 @@ class CategoriaController extends Controller
             ], 404);
         }
 
+        // Remover imagem se existir
+        if ($categoria->imagem_url) {
+            $this->deleteImagemArquivo($categoria->imagem_url);
+        }
+
         $categoria->delete();
 
         $this->clearCategoriaCache();
@@ -219,6 +231,88 @@ class CategoriaController extends Controller
             'success' => true,
             'message' => 'Categoria removida com sucesso'
         ]);
+    }
+
+    /**
+     * Upload de imagem para categoria
+     * POST /api/admin/categorias/upload-imagem
+     */
+    public function uploadImagem(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'imagem' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:2048',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'error' => $validator->errors()->first()
+            ], 422);
+        }
+
+        try {
+            $file = $request->file('imagem');
+            $nomeArquivo = 'categoria_' . time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
+
+            // Caminho: storage/app/public/categorias
+            $caminho = $file->storeAs('public/categorias', $nomeArquivo);
+
+            // URL pública
+            $url = Storage::url($caminho);
+
+            return response()->json([
+                'success' => true,
+                'url' => $url,
+                'message' => 'Imagem enviada com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao fazer upload da imagem: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Remover imagem da categoria
+     * DELETE /api/admin/categorias/{id}/imagem
+     */
+    public function removerImagem($id)
+    {
+        $categoria = Categoria::find($id);
+
+        if (!$categoria) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Categoria não encontrada'
+            ], 404);
+        }
+
+        if (!$categoria->imagem_url) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Categoria não possui imagem'
+            ], 400);
+        }
+
+        try {
+            $this->deleteImagemArquivo($categoria->imagem_url);
+
+            $categoria->imagem_url = null;
+            $categoria->save();
+
+            $this->clearCategoriaCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Imagem removida com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao remover imagem: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -235,6 +329,7 @@ class CategoriaController extends Controller
             'cor' => (string) ($categoria->cor ?? 'primary'),
             'ativo' => (bool) $categoria->ativo,
             'servicos_count' => (int) ($categoria->servicos_count ?? 0),
+            'imagem_url' => $categoria->imagem_url ? (string) $categoria->imagem_url : null,
             'created_at' => $categoria->created_at ? $categoria->created_at->toISOString() : null,
             'updated_at' => $categoria->updated_at ? $categoria->updated_at->toISOString() : null,
         ];
@@ -262,12 +357,29 @@ class CategoriaController extends Controller
         Cache::forget('categorias_publicas');
 
         // Limpar cache de admin (várias páginas)
-        for ($page = 1; $page <= 5; $page++) {
+        for ($page = 1; $page <= 10; $page++) {
             Cache::forget("admin_categorias_page_{$page}");
         }
 
-        // Limpar cache de categorias específicas (padrão)
-        // Não podemos limpar todas individualmente, mas podemos limpar por padrão
-        // Em um ambiente de produção, seria melhor usar Redis com tags
+        // Limpar cache de categorias específicas
+        $categorias = Categoria::all();
+        foreach ($categorias as $categoria) {
+            Cache::forget("categoria_{$categoria->id}");
+        }
+    }
+
+    /**
+     * Deletar arquivo de imagem do storage
+     */
+    private function deleteImagemArquivo($imagemUrl)
+    {
+        if (!$imagemUrl) return;
+
+        // Extrair o caminho relativo da URL
+        $path = str_replace('/storage', 'public', $imagemUrl);
+
+        if (Storage::exists($path)) {
+            Storage::delete($path);
+        }
     }
 }
