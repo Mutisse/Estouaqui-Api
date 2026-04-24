@@ -7,6 +7,7 @@ use App\Models\Favorito;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use App\Notifications\DynamicNotification;
 
 class FavoritoController extends Controller
 {
@@ -39,7 +40,7 @@ class FavoritoController extends Controller
                         ] : null
                     ];
                 })
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -83,13 +84,20 @@ class FavoritoController extends Controller
                 'prestador_id' => $prestadorId,
             ]);
 
-            // ✅ CARREGAR RELACIONAMENTO
+            // ✅ NOTIFICAÇÃO: Cliente adicionou prestador aos favoritos
+            $prestador->notify(new DynamicNotification('novo_favorito', [
+                'cliente_nome' => $user->nome,
+                'prestador_nome' => $prestador->nome,
+                'cliente_id' => $user->id,
+            ]));
+            // Log::info("Notificação 'novo_favorito' enviada para o prestador ID: {$prestador->id}");
+
+            // CARREGAR RELACIONAMENTO
             $favorito->load('prestador:id,nome,foto,telefone,media_avaliacao,profissao,ativo');
 
             // Limpar cache
             $this->clearFavoritoCache($user->id);
 
-            // ✅ CONVERTER PARA ARRAY COM CASTS
             return response()->json([
                 'success' => true,
                 'message' => 'Prestador adicionado aos favoritos',
@@ -175,7 +183,6 @@ class FavoritoController extends Controller
         Cache::forget("dashboard_{$userId}");
 
         // Limpar caches de verificação de favoritos (padrão)
-        // Usando padrão para limpar caches relacionados
         $keys = Cache::get("cliente_favorito_keys_{$userId}");
         if ($keys && is_array($keys)) {
             foreach ($keys as $key) {

@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use App\Notifications\DynamicNotification;
 
 class ClienteController extends Controller
 {
@@ -80,13 +81,9 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 2. PEDIDOS DO CLIENTE (COM CACHE E TOARRAY)
+    // 2. PEDIDOS DO CLIENTE
     // ==========================================
 
-    /**
-     * Listar pedidos do cliente
-     * GET /api/cliente/pedidos
-     */
     /**
      * Listar pedidos do cliente
      * GET /api/cliente/pedidos
@@ -108,9 +105,8 @@ class ClienteController extends Controller
 
             $pedidos = $query->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
                 ->orderBy('created_at', 'desc')
-                ->get(); // ✅ Mudar de paginate() para get()
+                ->get();
 
-            // ✅ Converter para array com os campos formatados
             return $pedidos->map(function ($pedido) {
                 return [
                     'id' => $pedido->id,
@@ -132,18 +128,13 @@ class ClienteController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $pedidos  // ✅ Agora é um array, não um objeto Paginator
+            'data' => $pedidos
         ]);
     }
-    /**
-     * Listar pedidos do cliente (formato mobile - sem paginação)
-     * GET /api/cliente/meus-pedidos
-     */
-   // app/Http/Controllers/Api/ClienteController.php
 
     /**
-     * Listar pedidos do cliente
-     * GET /api/cliente/pedidos/meus-pedidos
+     * Listar pedidos do cliente (formato mobile)
+     * GET /api/cliente/meus-pedidos
      */
     public function meusPedidos(Request $request)
     {
@@ -189,13 +180,14 @@ class ClienteController extends Controller
                 'data' => $pedidosFormatados
             ]);
         } catch (\Exception $e) {
-           error_log('Erro: ' . $e->getMessage());  // PHP nativo
+            error_log('Erro: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Erro ao carregar pedidos: ' . $e->getMessage()
             ], 500);
         }
     }
+
     /**
      * Detalhes de um pedido específico
      * GET /api/cliente/pedidos/{id}
@@ -225,7 +217,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Criar novo pedido (limpar cache)
+     * Criar novo pedido
      * POST /api/cliente/pedidos
      */
     public function createPedido(Request $request)
@@ -259,6 +251,18 @@ class ClienteController extends Controller
                 'numero' => 'PED-' . strtoupper(uniqid()),
             ]);
 
+            // ✅ NOTIFICAÇÃO: Novo pedido criado para o PRESTADOR
+            $prestador = User::find($request->prestador_id);
+            if ($prestador) {
+                $prestador->notify(new DynamicNotification('novo_pedido_cliente', [
+                    'cliente_nome' => $user->nome,
+                    'pedido_numero' => $pedido->numero,
+                    'data' => $request->data,
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'novo_pedido_cliente' enviada para o prestador ID: {$prestador->id}");
+            }
+
             // Limpar cache do cliente
             $this->clearClienteCache($user->id);
 
@@ -276,7 +280,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Cancelar pedido (limpar cache)
+     * Cancelar pedido
      * PUT /api/cliente/pedidos/{id}/cancelar
      */
     public function cancelarPedido(Request $request, $id)
@@ -301,6 +305,17 @@ class ClienteController extends Controller
         $pedido->status = 'cancelado';
         $pedido->save();
 
+        // ✅ NOTIFICAÇÃO: Pedido cancelado para o PRESTADOR
+        $prestador = $pedido->prestador;
+        if ($prestador) {
+            $prestador->notify(new DynamicNotification('pedido_cancelado_cliente', [
+                'cliente_nome' => $user->nome,
+                'pedido_numero' => $pedido->numero ?? $pedido->id,
+                'pedido_id' => $pedido->id,
+            ]));
+            Log::info("Notificação 'pedido_cancelado_cliente' enviada para o prestador ID: {$prestador->id}");
+        }
+
         // Limpar cache
         $this->clearClienteCache($user->id);
         Cache::forget("cliente_pedido_{$user->id}_{$id}");
@@ -313,7 +328,7 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 3. AVALIAÇÕES DO CLIENTE (COM CACHE E TOARRAY)
+    // 3. AVALIAÇÕES DO CLIENTE
     // ==========================================
 
     /**
@@ -340,7 +355,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Criar avaliação (limpar cache)
+     * Criar avaliação
      * POST /api/cliente/avaliacoes
      */
     public function createAvaliacao(Request $request)
@@ -396,6 +411,20 @@ class ClienteController extends Controller
                 'categorias' => $request->categorias,
             ]);
 
+            // ✅ NOTIFICAÇÃO: Nova avaliação para o PRESTADOR
+            $prestador = User::find($request->prestador_id);
+            if ($prestador) {
+                $comentarioResumo = $request->comentario ? substr($request->comentario, 0, 100) : 'Sem comentário';
+                $prestador->notify(new DynamicNotification('nova_avaliacao', [
+                    'cliente_nome' => $user->nome,
+                    'nota' => $request->nota,
+                    'comentario_resumo' => $comentarioResumo,
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'avaliacao_id' => $avaliacao->id,
+                ]));
+                Log::info("Notificação 'nova_avaliacao' enviada para o prestador ID: {$prestador->id}");
+            }
+
             // Atualizar média do prestador
             $this->atualizarMediaPrestador($request->prestador_id);
 
@@ -417,7 +446,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Atualizar avaliação (limpar cache)
+     * Atualizar avaliação
      * PUT /api/cliente/avaliacoes/{id}
      */
     public function updateAvaliacao(Request $request, $id)
@@ -445,6 +474,9 @@ class ClienteController extends Controller
             ], 422);
         }
 
+        $notaAnterior = $avaliacao->nota;
+        $prestadorId = $avaliacao->prestador_id;
+
         try {
             if ($request->has('nota')) $avaliacao->nota = $request->nota;
             if ($request->has('comentario')) $avaliacao->comentario = $request->comentario;
@@ -452,12 +484,26 @@ class ClienteController extends Controller
 
             $avaliacao->save();
 
+            // ✅ NOTIFICAÇÃO: Avaliação atualizada para o PRESTADOR
+            if ($request->has('nota') && $notaAnterior != $request->nota) {
+                $prestador = User::find($prestadorId);
+                if ($prestador) {
+                    $prestador->notify(new DynamicNotification('avaliacao_atualizada', [
+                        'cliente_nome' => $user->nome,
+                        'nota_anterior' => $notaAnterior,
+                        'nova_nota' => $request->nota,
+                        'avaliacao_id' => $avaliacao->id,
+                    ]));
+                    Log::info("Notificação 'avaliacao_atualizada' enviada para o prestador ID: {$prestador->id}");
+                }
+            }
+
             // Atualizar média do prestador
-            $this->atualizarMediaPrestador($avaliacao->prestador_id);
+            $this->atualizarMediaPrestador($prestadorId);
 
             // Limpar cache
             $this->clearClienteCache($user->id);
-            $this->clearPrestadorCache($avaliacao->prestador_id);
+            $this->clearPrestadorCache($prestadorId);
 
             return response()->json([
                 'success' => true,
@@ -473,7 +519,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Deletar avaliação (limpar cache)
+     * Deletar avaliação
      * DELETE /api/cliente/avaliacoes/{id}
      */
     public function deleteAvaliacao(Request $request, $id)
@@ -490,6 +536,16 @@ class ClienteController extends Controller
 
         $prestadorId = $avaliacao->prestador_id;
         $avaliacao->delete();
+
+        // ✅ NOTIFICAÇÃO: Avaliação removida para o PRESTADOR
+        $prestador = User::find($prestadorId);
+        if ($prestador) {
+            $prestador->notify(new DynamicNotification('avaliacao_removida', [
+                'cliente_nome' => $user->nome,
+                'avaliacao_id' => $id,
+            ]));
+            Log::info("Notificação 'avaliacao_removida' enviada para o prestador ID: {$prestador->id}");
+        }
 
         // Atualizar média do prestador
         $this->atualizarMediaPrestador($prestadorId);
@@ -544,7 +600,7 @@ class ClienteController extends Controller
     }
 
     // ==========================================
-    // 4. FAVORITOS (COM CACHE E TOARRAY)
+    // 4. FAVORITOS
     // ==========================================
 
     /**
@@ -561,7 +617,7 @@ class ClienteController extends Controller
                 ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->toArray(); // ✅ CONVERTER PARA ARRAY
+                ->toArray();
         });
 
         return response()->json([
@@ -571,7 +627,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Adicionar prestador aos favoritos (limpar cache)
+     * Adicionar prestador aos favoritos
      * POST /api/cliente/favoritos/{prestadorId}
      */
     public function addFavorito(Request $request, $prestadorId)
@@ -605,6 +661,9 @@ class ClienteController extends Controller
                 'prestador_id' => $prestadorId,
             ]);
 
+            // ✅ NOTIFICAÇÃO: Novo favorito para o PRESTADOR (já implementada no FavoritoController)
+            // A notificação já foi adicionada no FavoritoController@store
+
             // Limpar cache
             Cache::forget("cliente_favoritos_{$user->id}");
 
@@ -622,7 +681,7 @@ class ClienteController extends Controller
     }
 
     /**
-     * Remover prestador dos favoritos (limpar cache)
+     * Remover prestador dos favoritos
      * DELETE /api/cliente/favoritos/{prestadorId}
      */
     public function removeFavorito(Request $request, $prestadorId)
@@ -681,7 +740,6 @@ class ClienteController extends Controller
      */
     private function clearClienteCache($userId)
     {
-        // Limpar cache de pedidos (várias páginas)
         $statuses = ['pendente', 'confirmado', 'concluido', 'cancelado', null];
         foreach ($statuses as $status) {
             for ($page = 1; $page <= 5; $page++) {
@@ -690,11 +748,8 @@ class ClienteController extends Controller
             }
         }
 
-        // Limpar outros caches
         Cache::forget("cliente_avaliacoes_{$userId}_1");
         Cache::forget("cliente_favoritos_{$userId}");
-
-        // Limpar cache de dashboard
         Cache::forget("dashboard_{$userId}");
     }
 

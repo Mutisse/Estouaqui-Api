@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Transacao;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use App\Notifications\DynamicNotification;
 
 class TransacaoController extends Controller
 {
@@ -101,6 +103,19 @@ class TransacaoController extends Controller
                 'status' => 'pendente',
             ]);
 
+            // ✅ NOTIFICAÇÃO: Nova transação criada para o usuário
+            $usuario = User::find($request->user_id);
+            if ($usuario) {
+                $tipoTexto = $this->getTipoTexto($request->tipo);
+                $usuario->notify(new DynamicNotification('nova_transacao', [
+                    'valor' => number_format($request->valor, 2, ',', '.'),
+                    'tipo' => $tipoTexto,
+                    'descricao' => $request->descricao ?? $tipoTexto,
+                    'transacao_id' => $transacao->id,
+                ]));
+                // Log::info("Notificação 'nova_transacao' enviada para o usuário ID: {$usuario->id}");
+            }
+
             $this->clearTransacaoCache($request->user_id);
 
             return response()->json([
@@ -143,11 +158,25 @@ class TransacaoController extends Controller
         }
 
         try {
+            $statusAnterior = $transacao->status;
             $transacao->status = $request->status;
             if ($request->status === 'concluido') {
                 $transacao->data_confirmacao = now();
             }
             $transacao->save();
+
+            // ✅ NOTIFICAÇÃO: Status da transação atualizado
+            $usuario = $transacao->user;
+            if ($usuario && $statusAnterior !== $request->status) {
+                $statusTexto = $this->getStatusTexto($request->status);
+                $usuario->notify(new DynamicNotification('transacao_status', [
+                    'valor' => number_format($transacao->valor, 2, ',', '.'),
+                    'status' => $statusTexto,
+                    'transacao_id' => $transacao->id,
+                    'tipo' => $this->getTipoTexto($transacao->tipo),
+                ]));
+                // Log::info("Notificação 'transacao_status' enviada para o usuário ID: {$usuario->id}");
+            }
 
             $this->clearTransacaoCache($transacao->user_id);
 
@@ -215,5 +244,32 @@ class TransacaoController extends Controller
             Cache::forget("prestador_saques_{$userId}");
             Cache::forget("prestador_ganhos_{$userId}");
         }
+    }
+
+    /**
+     * Obter texto amigável do tipo de transação
+     */
+    private function getTipoTexto($tipo)
+    {
+        return match ($tipo) {
+            'entrada' => 'Recebimento',
+            'saida' => 'Pagamento',
+            'comissao' => 'Comissão',
+            default => 'Transação',
+        };
+    }
+
+    /**
+     * Obter texto amigável do status
+     */
+    private function getStatusTexto($status)
+    {
+        return match ($status) {
+            'pendente' => 'pendente',
+            'processando' => 'em processamento',
+            'concluido' => 'concluída',
+            'cancelado' => 'cancelada',
+            default => $status,
+        };
     }
 }

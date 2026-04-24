@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use App\Notifications\DynamicNotification;
 
 class ChatController extends Controller
 {
@@ -66,6 +67,18 @@ class ChatController extends Controller
             'mensagem' => $request->message,
             'lida' => false,
         ]);
+
+        // ✅ NOTIFICAÇÃO: Nova mensagem para o destinatário
+        $destinatario = User::find($prestadorId);
+        if ($destinatario) {
+            $destinatario->notify(new DynamicNotification('nova_mensagem', [
+                'remetente_nome' => $usuario->nome,
+                'mensagem_resumo' => substr($request->message, 0, 100),
+                'conversa_id' => $prestadorId,
+                'mensagem_id' => $mensagem->id,
+            ]));
+            // Log::info("Notificação 'nova_mensagem' enviada para o usuário ID: {$destinatario->id}");
+        }
 
         // Limpar cache
         $this->clearChatCache($usuario->id, $prestadorId);

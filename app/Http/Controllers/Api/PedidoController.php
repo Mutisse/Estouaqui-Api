@@ -4,10 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Pedido;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use App\Notifications\DynamicNotification;
 
 class PedidoController extends Controller
 {
@@ -92,14 +94,6 @@ class PedidoController extends Controller
      * Cliente criar novo pedido
      * POST /api/cliente/pedidos
      */
-    /**
-     * Cliente criar novo pedido
-     * POST /api/cliente/pedidos
-     */
-    /**
-     * Cliente criar novo pedido
-     * POST /api/cliente/pedidos
-     */
     public function createPedido(Request $request)
     {
         Log::info('🔵🔵🔵 PedidoController@createPedido - INICIADO 🔵🔵🔵');
@@ -165,6 +159,23 @@ class PedidoController extends Controller
                 'valor' => null,
             ]);
 
+            // ✅ NOTIFICAÇÃO 1: Nova solicitação para PRESTADORES da categoria
+            $prestadores = User::where('tipo', 'prestador')
+                ->whereHas('categorias', function ($query) use ($categoria_id) {
+                    $query->where('categoria_id', $categoria_id);
+                })
+                ->get();
+
+            foreach ($prestadores as $prestador) {
+                $prestador->notify(new DynamicNotification('nova_solicitacao', [
+                    'cliente_nome' => $cliente->nome,
+                    'pedido_numero' => $pedido->id,
+                    'categoria_nome' => $pedido->categoria->nome ?? 'Serviço',
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'nova_solicitacao' enviada para o prestador ID: {$prestador->id}");
+            }
+
             return response()->json([
                 'success' => true,
                 'message' => 'Pedido publicado com sucesso!',
@@ -214,12 +225,7 @@ class PedidoController extends Controller
     public function updateStatus(Request $request, $id)
     {
         Log::info('🔵 PedidoController@updateStatus - ID: ' . $id);
-        // LOG COMPLETO DO QUE O FRONTEND ENVIA
-        Log::info('========== CONTEÚDO COMPLETO DO REQUEST ==========');
-        Log::info('POST params: ' . json_encode($request->post()));
-        Log::info('REQUEST all: ' . json_encode($request->all()));
-        Log::info('RAW CONTENT: ' . $request->getContent());
-        Log::info('==================================================');
+
         $pedido = Pedido::find($id);
 
         if (!$pedido) {
@@ -242,8 +248,57 @@ class PedidoController extends Controller
         }
 
         try {
+            $statusAnterior = $pedido->status;
             $pedido->status = $request->status;
             $pedido->save();
+
+            // ✅ NOTIFICAÇÕES baseadas no novo status
+            $cliente = $pedido->cliente;
+
+            switch ($request->status) {
+                case 'em_andamento':
+                    if ($cliente) {
+                        $cliente->notify(new DynamicNotification('pedido_em_andamento', [
+                            'pedido_numero' => $pedido->numero ?? $pedido->id,
+                            'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
+                            'pedido_id' => $pedido->id,
+                        ]));
+                        Log::info("Notificação 'pedido_em_andamento' enviada para o cliente ID: {$cliente->id}");
+                    }
+                    break;
+
+                case 'concluido':
+                    if ($cliente) {
+                        $cliente->notify(new DynamicNotification('pedido_concluido', [
+                            'pedido_numero' => $pedido->numero ?? $pedido->id,
+                            'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
+                            'pedido_id' => $pedido->id,
+                        ]));
+                        Log::info("Notificação 'pedido_concluido' enviada para o cliente ID: {$cliente->id}");
+                    }
+                    break;
+
+                case 'cancelado':
+                    if ($cliente) {
+                        $cliente->notify(new DynamicNotification('pedido_cancelado', [
+                            'pedido_numero' => $pedido->numero ?? $pedido->id,
+                            'pedido_id' => $pedido->id,
+                        ]));
+                        Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
+                    }
+                    break;
+
+                case 'aceito':
+                    if ($cliente) {
+                        $cliente->notify(new DynamicNotification('pedido_confirmado', [
+                            'pedido_numero' => $pedido->numero ?? $pedido->id,
+                            'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
+                            'pedido_id' => $pedido->id,
+                        ]));
+                        Log::info("Notificação 'pedido_confirmado' enviada para o cliente ID: {$cliente->id}");
+                    }
+                    break;
+            }
 
             $this->clearPedidoCache($id, $pedido->cliente_id, $pedido->prestador_id);
 
@@ -292,6 +347,16 @@ class PedidoController extends Controller
         try {
             $pedido->status = 'cancelado';
             $pedido->save();
+
+            // ✅ NOTIFICAÇÃO: Pedido cancelado para o CLIENTE
+            $cliente = $pedido->cliente;
+            if ($cliente) {
+                $cliente->notify(new DynamicNotification('pedido_cancelado', [
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
+            }
 
             $this->clearPedidoCache($id, $pedido->cliente_id, $pedido->prestador_id);
 

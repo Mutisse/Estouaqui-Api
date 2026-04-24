@@ -4,12 +4,14 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Categoria;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
-
+use App\Notifications\DynamicNotification;
+use Illuminate\Support\Facades\Log;  
 class CategoriaController extends Controller
 {
     /**
@@ -97,6 +99,17 @@ class CategoriaController extends Controller
                 'ativo' => true,
             ]);
 
+            // ✅ NOTIFICAÇÃO: Nova categoria para TODOS os PRESTADORES
+            $prestadores = User::where('tipo', 'prestador')->get();
+            foreach ($prestadores as $prestador) {
+                $prestador->notify(new DynamicNotification('nova_categoria', [
+                    'categoria_nome' => $categoria->nome,
+                    'categoria_id' => $categoria->id,
+                    'data_criacao' => now()->format('d/m/Y'),
+                ]));
+            }
+            Log::info("Notificação 'nova_categoria' enviada para " . count($prestadores) . " prestadores");
+
             $this->clearCategoriaCache();
 
             return response()->json([
@@ -170,6 +183,8 @@ class CategoriaController extends Controller
             ], 422);
         }
 
+        $statusAnterior = $categoria->ativo;
+
         try {
             // Se houver nova imagem e existir imagem antiga, remover a antiga
             if ($request->has('imagem_url') && $categoria->imagem_url && $request->imagem_url !== $categoria->imagem_url) {
@@ -187,6 +202,20 @@ class CategoriaController extends Controller
             if ($request->has('ativo')) $categoria->ativo = $request->ativo;
 
             $categoria->save();
+
+            // ✅ NOTIFICAÇÃO: Categoria atualizada (se status mudou ou dados importantes)
+            if ($statusAnterior != $categoria->ativo) {
+                $prestadores = User::where('tipo', 'prestador')->get();
+                $statusTexto = $categoria->ativo ? 'ativada' : 'desativada';
+                foreach ($prestadores as $prestador) {
+                    $prestador->notify(new DynamicNotification('categoria_atualizada', [
+                        'categoria_nome' => $categoria->nome,
+                        'status' => $statusTexto,
+                        'categoria_id' => $categoria->id,
+                    ]));
+                }
+                Log::info("Notificação 'categoria_atualizada' enviada para " . count($prestadores) . " prestadores");
+            }
 
             $this->clearCategoriaCache();
 
@@ -218,12 +247,24 @@ class CategoriaController extends Controller
             ], 404);
         }
 
+        $categoriaNome = $categoria->nome;
+
         // Remover imagem se existir
         if ($categoria->imagem_url) {
             $this->deleteImagemArquivo($categoria->imagem_url);
         }
 
         $categoria->delete();
+
+        // ✅ NOTIFICAÇÃO: Categoria removida para TODOS os PRESTADORES
+        $prestadores = User::where('tipo', 'prestador')->get();
+        foreach ($prestadores as $prestador) {
+            $prestador->notify(new DynamicNotification('categoria_removida', [
+                'categoria_nome' => $categoriaNome,
+                'data_remocao' => now()->format('d/m/Y'),
+            ]));
+        }
+        Log::info("Notificação 'categoria_removida' enviada para " . count($prestadores) . " prestadores");
 
         $this->clearCategoriaCache();
 

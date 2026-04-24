@@ -17,6 +17,7 @@ use App\Models\PrestadorIntervalo;
 use App\Models\PrestadorDisponibilidade;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use App\Notifications\DynamicNotification;
 
 class PrestadorController extends Controller
 {
@@ -55,7 +56,6 @@ class PrestadorController extends Controller
             'portfolio.0' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
             'portfolio.1' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
             'portfolio.2' => 'nullable|image|mimes:jpeg,png,jpg|max:5120',
-            // ✅ ADICIONAR LATITUDE E LONGITUDE
             'latitude' => 'nullable|numeric|between:-90,90',
             'longitude' => 'nullable|numeric|between:-180,180',
         ]);
@@ -87,7 +87,6 @@ class PrestadorController extends Controller
                 'tipo' => 'prestador',
                 'profissao' => $request->profissao ?? 'Prestador de Serviços',
                 'sobre' => $request->sobre ?? $request->descricao,
-                // ✅ ADICIONAR LATITUDE E LONGITUDE
                 'latitude' => $request->latitude,
                 'longitude' => $request->longitude,
                 'preferences' => json_encode([
@@ -454,6 +453,17 @@ class PrestadorController extends Controller
         $pedido->status = 'aceito';
         $pedido->save();
 
+        // ✅ NOTIFICAÇÃO: Pedido aceito para o CLIENTE
+        $cliente = $pedido->cliente;
+        if ($cliente) {
+            $cliente->notify(new DynamicNotification('pedido_confirmado', [
+                'pedido_numero' => $pedido->numero ?? $pedido->id,
+                'prestador_nome' => $user->nome,
+                'pedido_id' => $pedido->id,
+            ]));
+            Log::info("Notificação 'pedido_confirmado' enviada para o cliente ID: {$cliente->id}");
+        }
+
         $this->clearPrestadorCache($user->id);
 
         return response()->json([
@@ -488,6 +498,16 @@ class PrestadorController extends Controller
 
         $pedido->status = 'cancelado';
         $pedido->save();
+
+        // ✅ NOTIFICAÇÃO: Pedido recusado/cancelado para o CLIENTE
+        $cliente = $pedido->cliente;
+        if ($cliente) {
+            $cliente->notify(new DynamicNotification('pedido_cancelado', [
+                'pedido_numero' => $pedido->numero ?? $pedido->id,
+                'pedido_id' => $pedido->id,
+            ]));
+            Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
+        }
 
         $this->clearPrestadorCache($user->id);
 

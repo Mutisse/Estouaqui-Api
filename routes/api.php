@@ -107,7 +107,7 @@ Route::prefix('public')->group(function () {
 });
 
 // ==========================================
-// 9. ROTAS PÚBLICAS - MONITORAMENTO
+// ROTAS PÚBLICAS - MONITORAMENTO
 // ==========================================
 Route::prefix('system')->group(function () {
     Route::get('/health', [SystemMonitorController::class, 'health']);
@@ -210,13 +210,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     Route::middleware('role:cliente')->prefix('cliente')->group(function () {
 
-        // Pedidos - NOVAS ROTAS
-        // Pedidos - ROTAS CORRIGIDAS
+        // Pedidos
         Route::prefix('pedidos')->group(function () {
-            Route::post('/', [PedidoController::class, 'createPedido']);           // ✅ Criar pedido
-            Route::get('/meus-pedidos', [ClienteController::class, 'meusPedidos']); // ✅ Listar meus pedidos
-            Route::get('/{id}', [PedidoController::class, 'show']);                // ✅ Detalhes do pedido (CORRIGIDO)
-            Route::put('/{id}/cancelar', [PedidoController::class, 'cancelarPedido']); // ✅ Cancelar pedido
+            Route::post('/', [PedidoController::class, 'createPedido']);
+            Route::get('/meus-pedidos', [ClienteController::class, 'meusPedidos']);
+            Route::get('/{id}', [PedidoController::class, 'show']);
+            Route::put('/{id}/cancelar', [PedidoController::class, 'cancelarPedido']);
         });
 
         // Avaliações
@@ -237,7 +236,7 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{prestadorId}/check', [FavoritoController::class, 'check']);
         });
 
-        // ✅ PROPOSTAS DO CLIENTE
+        // Propostas do cliente
         Route::get('/propostas', [PropostaController::class, 'minhasPropostasCliente']);
         Route::put('/propostas/{id}/aceitar', [PropostaController::class, 'aceitar']);
         Route::put('/propostas/{id}/recusar', [PropostaController::class, 'recusar']);
@@ -302,18 +301,20 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/stats', [PrestadorController::class, 'stats']);
         Route::post('/clear-cache', [PrestadorController::class, 'clearCache']);
 
-        // ✅ PROPOSTAS DO PRESTADOR
+        // Propostas do prestador
         Route::post('/propostas', [PropostaController::class, 'store']);
         Route::get('/propostas', [PropostaController::class, 'minhasPropostasPrestador']);
         Route::get('/pedidos-disponiveis', [PropostaController::class, 'pedidosDisponiveis']);
     });
 
     // ==========================================
-    // 21. ROTAS DO ADMIN (role:admin)
+    // 21. ROTAS DO ADMIN (role:admin) - COMPLETAS E SEM CONFLITOS
     // ==========================================
     Route::middleware('role:admin')->prefix('admin')->group(function () {
 
-        // Dashboard
+        // ==========================================
+        // DASHBOARD E ESTATÍSTICAS
+        // ==========================================
         Route::get('/dashboard', [AdminController::class, 'dashboard']);
         Route::get('/atividade', [AdminController::class, 'atividade']);
         Route::get('/stats', [AdminController::class, 'stats']);
@@ -321,11 +322,21 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/configuracoes', [AdminController::class, 'configuracoes']);
         Route::put('/configuracoes', [AdminController::class, 'updateConfiguracoes']);
 
-        // Gestão de usuários
+        // ==========================================
+        // NOTIFICAÇÕES DO ADMIN
+        // ==========================================
+        Route::prefix('notifications')->group(function () {
+            Route::get('/', [AdminController::class, 'notifications']);
+            Route::put('/read-all', [AdminController::class, 'markAllNotificationsRead']);
+            Route::put('/{id}/read', [AdminController::class, 'markNotificationRead']);
+        });
+
+        // ==========================================
+        // GESTÃO DE UTILIZADORES
+        // ==========================================
         Route::prefix('users')->group(function () {
             Route::get('/', [AdminController::class, 'index']);
             Route::get('/export', [AdminController::class, 'export']);
-            Route::get('/stats', [AdminController::class, 'stats']);
             Route::get('/email/{email}', [AdminController::class, 'getByEmail']);
 
             Route::prefix('{id}')->group(function () {
@@ -341,7 +352,9 @@ Route::middleware('auth:sanctum')->group(function () {
             });
         });
 
-        // Gestão de prestadores
+        // ==========================================
+        // GESTÃO DE PRESTADORES
+        // ==========================================
         Route::prefix('prestadores')->group(function () {
             Route::get('/', [AdminController::class, 'prestadores']);
             Route::get('/pendentes', [AdminController::class, 'prestadoresPendentes']);
@@ -349,20 +362,22 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{id}/reprovar', [AdminController::class, 'reprovarPrestador']);
         });
 
-        // Gestão de categorias
+        // ==========================================
+        // GESTÃO DE CATEGORIAS
+        // ==========================================
         Route::prefix('categorias')->group(function () {
             Route::get('/', [CategoriaController::class, 'index']);
             Route::post('/', [CategoriaController::class, 'store']);
             Route::get('/{id}', [CategoriaController::class, 'show']);
             Route::put('/{id}', [CategoriaController::class, 'update']);
             Route::delete('/{id}', [CategoriaController::class, 'destroy']);
-
-            // NOVAS ROTAS PARA IMAGEM
             Route::post('/upload-imagem', [CategoriaController::class, 'uploadImagem']);
             Route::delete('/{id}/imagem', [CategoriaController::class, 'removerImagem']);
         });
 
-        // Gestão de serviços
+        // ==========================================
+        // GESTÃO DE SERVIÇOS
+        // ==========================================
         Route::prefix('servicos')->group(function () {
             Route::get('/', [ServicoController::class, 'index']);
             Route::post('/', [ServicoController::class, 'store']);
@@ -371,31 +386,39 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::delete('/{id}', [ServicoController::class, 'destroy']);
         });
 
-        // Gestão de pedidos
+        // ==========================================
+        // GESTÃO DE PEDIDOS - USANDO AdminController
+        // ==========================================
         Route::prefix('pedidos')->group(function () {
-            Route::get('/', [PedidoController::class, 'index']);
-            Route::get('/{id}', [PedidoController::class, 'show']);
-            Route::put('/{id}/status', [PedidoController::class, 'updateStatus']);
-            Route::delete('/{id}/cancel', [PedidoController::class, 'cancel']);
+            Route::get('/', [AdminController::class, 'pedidos']);
+            Route::get('/{id}', [AdminController::class, 'showPedido']);
+            Route::put('/{id}/status', [AdminController::class, 'updatePedidoStatus']);
+            Route::delete('/{id}/cancel', [AdminController::class, 'cancelPedido']);
         });
 
-        // Gestão de avaliações
+        // ==========================================
+        // GESTÃO DE AVALIAÇÕES
+        // ==========================================
         Route::prefix('avaliacoes')->group(function () {
             Route::get('/', [AvaliacaoController::class, 'index']);
             Route::get('/{id}', [AvaliacaoController::class, 'show']);
             Route::delete('/{id}', [AvaliacaoController::class, 'destroy']);
         });
 
-        // Financeiro
+        // ==========================================
+        // FINANCEIRO - USANDO AdminController
+        // ==========================================
         Route::prefix('financeiro')->group(function () {
-            Route::get('/resumo', [TransacaoController::class, 'resumo']);
-            Route::get('/transacoes', [TransacaoController::class, 'index']);
-            Route::get('/transacoes/{id}', [TransacaoController::class, 'show']);
-            Route::post('/transacoes', [TransacaoController::class, 'store']);
-            Route::put('/transacoes/{id}/status', [TransacaoController::class, 'updateStatus']);
+            Route::get('/resumo', [AdminController::class, 'resumoFinanceiro']);
+            Route::get('/transacoes', [AdminController::class, 'transacoes']);
+            Route::get('/transacoes/{id}', [AdminController::class, 'showTransacao']);
+            Route::post('/transacoes', [AdminController::class, 'storeTransacao']);
+            Route::put('/transacoes/{id}/status', [AdminController::class, 'updateTransacaoStatus']);
         });
 
-        // Relatórios
+        // ==========================================
+        // RELATÓRIOS - USANDO AdminController
+        // ==========================================
         Route::prefix('relatorios')->group(function () {
             Route::get('/usuarios', [AdminController::class, 'relatorioUsuarios']);
             Route::get('/servicos', [AdminController::class, 'relatorioServicos']);
@@ -403,7 +426,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/prestadores', [AdminController::class, 'relatorioPrestadores']);
         });
 
-        // Admin - Promoções
+        // ==========================================
+        // GESTÃO DE PROMOÇÕES
+        // ==========================================
         Route::prefix('promocoes')->group(function () {
             Route::post('/', [PromocaoController::class, 'store']);
             Route::put('/{id}', [PromocaoController::class, 'update']);
@@ -415,6 +440,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // 22. MONITORAMENTO (PROTEGIDO - ADMIN)
     // ==========================================
     Route::middleware('role:admin')->prefix('system')->group(function () {
+        Route::get('/health', [SystemMonitorController::class, 'health']);
         Route::get('/metrics', [SystemMonitorController::class, 'metrics']);
         Route::get('/performance', [SystemMonitorController::class, 'performance']);
         Route::get('/cache-stats', [SystemMonitorController::class, 'cacheStats']);
@@ -422,5 +448,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/queue-stats', [SystemMonitorController::class, 'queueStats']);
         Route::get('/logs/recent', [SystemMonitorController::class, 'recentLogs']);
         Route::get('/alerts', [SystemMonitorController::class, 'alerts']);
+        Route::put('/alerts/{id}/resolve', [SystemMonitorController::class, 'resolveAlert']);
+        Route::get('/history', [SystemMonitorController::class, 'history']);
+        Route::get('/business-metrics', [SystemMonitorController::class, 'businessMetrics']);
+        Route::get('/export', [SystemMonitorController::class, 'export']);
+        Route::post('/save-daily-metrics', [SystemMonitorController::class, 'saveDailyMetrics']);
+        // NOVAS ROTAS
+        Route::get('/security/realtime', [SystemMonitorController::class, 'securityRealtime']);
+        Route::post('/security/block-ip', [SystemMonitorController::class, 'blockIp']);
+        Route::get('/external/check', [SystemMonitorController::class, 'checkExternalServicesRealtime']);
+        Route::get('/performance/endpoints', [SystemMonitorController::class, 'slowEndpoints']);
+        Route::get('/performance/status-codes', [SystemMonitorController::class, 'statusCodesAnalysis']);
+        Route::get('/business/advanced', [SystemMonitorController::class, 'advancedBusinessMetrics']);
+        Route::get('/executive-report', [SystemMonitorController::class, 'executiveReport']);
     });
 });

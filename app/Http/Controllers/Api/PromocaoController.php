@@ -4,11 +4,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Promocao;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
+use App\Notifications\DynamicNotification;
 
 class PromocaoController extends Controller
 {
@@ -330,6 +332,19 @@ class PromocaoController extends Controller
                 'imagem' => $request->imagem,
             ]);
 
+            // ✅ NOTIFICAÇÃO: Nova promoção para TODOS os CLIENTES
+            $clientes = User::where('tipo', 'cliente')->get();
+            foreach ($clientes as $cliente) {
+                $cliente->notify(new DynamicNotification('promocao_nova', [
+                    'promocao_titulo' => $promocao->titulo,
+                    'cupom' => $promocao->codigo,
+                    'desconto' => $promocao->valor_desconto,
+                    'validade' => $promocao->validade,
+                    'promocao_id' => $promocao->id,
+                ]));
+            }
+            Log::info("Notificação 'promocao_nova' enviada para " . count($clientes) . " clientes");
+
             $this->clearPromocaoCache();
 
             return response()->json([
@@ -381,6 +396,9 @@ class PromocaoController extends Controller
                 ], 422);
             }
 
+            $statusAnterior = $promocao->ativo;
+            $validadeAnterior = $promocao->validade;
+
             if ($request->has('codigo')) $promocao->codigo = strtoupper($request->codigo);
             if ($request->has('titulo')) $promocao->titulo = $request->titulo;
             if ($request->has('descricao')) $promocao->descricao = $request->descricao;
@@ -392,6 +410,21 @@ class PromocaoController extends Controller
             if ($request->has('imagem')) $promocao->imagem = $request->imagem;
 
             $promocao->save();
+
+            // ✅ NOTIFICAÇÃO: Promoção atualizada (se relevante)
+            if ($statusAnterior != $promocao->ativo || $validadeAnterior != $promocao->validade) {
+                $clientes = User::where('tipo', 'cliente')->get();
+                foreach ($clientes as $cliente) {
+                    $cliente->notify(new DynamicNotification('promocao_atualizada', [
+                        'promocao_titulo' => $promocao->titulo,
+                        'cupom' => $promocao->codigo,
+                        'status' => $promocao->ativo ? 'reativada' : 'desativada',
+                        'validade' => $promocao->validade,
+                        'promocao_id' => $promocao->id,
+                    ]));
+                }
+                Log::info("Notificação 'promocao_atualizada' enviada para " . count($clientes) . " clientes");
+            }
 
             $this->clearPromocaoCache();
 
@@ -490,6 +523,20 @@ class PromocaoController extends Controller
         }
     }
 
+   
+    /**
+     * Limpar cache do prestador (endpoint público)
+     * POST /api/prestador/clear-cache
+     */
+    public function clearCache(Request $request)
+    {
+        $this->clearPromocaoCache();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Cache de promoções limpo com sucesso'
+        ]);
+    }
     /**
      * Endpoint para forçar recarga do cache (admin)
      * POST /api/admin/promocoes/reload-cache

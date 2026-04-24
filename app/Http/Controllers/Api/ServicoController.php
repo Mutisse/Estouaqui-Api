@@ -4,9 +4,12 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Servico;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use App\Notifications\DynamicNotification;
 
 class ServicoController extends Controller
 {
@@ -104,6 +107,19 @@ class ServicoController extends Controller
                 'ativo' => true,
             ]);
 
+            // ✅ NOTIFICAÇÃO: Novo serviço para CLIENTES interessados na categoria
+            $clientes = User::where('tipo', 'cliente')->get();
+            foreach ($clientes as $cliente) {
+                $cliente->notify(new DynamicNotification('novo_servico', [
+                    'servico_nome' => $servico->nome,
+                    'preco' => number_format($servico->preco, 2, ',', '.'),
+                    'categoria_nome' => $servico->categoria->nome ?? 'Serviço',
+                    'prestador_nome' => $servico->prestador->nome ?? 'Prestador',
+                    'servico_id' => $servico->id,
+                ]));
+            }
+            Log::info("Notificação 'novo_servico' enviada para " . count($clientes) . " clientes");
+
             $this->clearServicoCache($servico->id, $request->prestador_id);
 
             return response()->json([
@@ -151,6 +167,9 @@ class ServicoController extends Controller
             ], 422);
         }
 
+        $precoAnterior = $servico->preco;
+        $ativoAnterior = $servico->ativo;
+
         try {
             if ($request->has('nome')) $servico->nome = $request->nome;
             if ($request->has('categoria_id')) $servico->categoria_id = $request->categoria_id;
@@ -161,6 +180,22 @@ class ServicoController extends Controller
             if ($request->has('ativo')) $servico->ativo = $request->ativo;
 
             $servico->save();
+
+            // ✅ NOTIFICAÇÃO: Serviço atualizado (apenas se preço ou status mudou)
+            if ($precoAnterior != $servico->preco || $ativoAnterior != $servico->ativo) {
+                $clientes = User::where('tipo', 'cliente')->get();
+                $statusTexto = $servico->ativo ? 'disponível' : 'indisponível';
+                foreach ($clientes as $cliente) {
+                    $cliente->notify(new DynamicNotification('servico_atualizado', [
+                        'servico_nome' => $servico->nome,
+                        'preco_novo' => number_format($servico->preco, 2, ',', '.'),
+                        'preco_antigo' => number_format($precoAnterior, 2, ',', '.'),
+                        'status' => $statusTexto,
+                        'servico_id' => $servico->id,
+                    ]));
+                }
+                Log::info("Notificação 'servico_atualizado' enviada para " . count($clientes) . " clientes");
+            }
 
             $this->clearServicoCache($id, $servico->prestador_id);
 
@@ -192,8 +227,19 @@ class ServicoController extends Controller
             ], 404);
         }
 
+        $servicoNome = $servico->nome;
         $prestadorId = $servico->prestador_id;
         $servico->delete();
+
+        // ✅ NOTIFICAÇÃO: Serviço removido para CLIENTES
+        $clientes = User::where('tipo', 'cliente')->get();
+        foreach ($clientes as $cliente) {
+            $cliente->notify(new DynamicNotification('servico_removido', [
+                'servico_nome' => $servicoNome,
+                'data_remocao' => now()->format('d/m/Y'),
+            ]));
+        }
+        Log::info("Notificação 'servico_removido' enviada para " . count($clientes) . " clientes");
 
         $this->clearServicoCache($id, $prestadorId);
 

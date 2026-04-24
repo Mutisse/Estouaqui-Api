@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use App\Notifications\DynamicNotification;
 
 class AdminController extends Controller
 {
@@ -333,6 +334,93 @@ class AdminController extends Controller
         }
     }
 
+    /**
+     * Buscar utilizador por email
+     * GET /api/admin/users/email/{email}
+     */
+    public function getByEmail($email)
+    {
+        try {
+            $user = User::where('email', $email)->first();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $user
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao buscar utilizador'
+            ], 500);
+        }
+    }
+
+    /**
+     * Deletar utilizador permanentemente
+     * DELETE /api/admin/users/{id}/force
+     */
+    public function forceDelete($id)
+    {
+        try {
+            $user = User::withTrashed()->find($id);
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Utilizador não encontrado'
+                ], 404);
+            }
+
+            $user->forceDelete();
+
+            $this->clearAdminCache($id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Utilizador deletado permanentemente'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao deletar utilizador'
+            ], 500);
+        }
+    }
+
+    /**
+     * Exportar utilizadores
+     * GET /api/admin/users/export
+     */
+    public function export(Request $request)
+    {
+        try {
+            $query = User::query();
+
+            if ($request->has('tipo')) {
+                $query->where('tipo', $request->tipo);
+            }
+
+            $users = $query->get(['id', 'nome', 'email', 'telefone', 'tipo', 'created_at']);
+
+            return response()->json([
+                'success' => true,
+                'data' => $users
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao exportar utilizadores'
+            ], 500);
+        }
+    }
+
     // ==========================================
     // 3. GESTÃO DE PRESTADORES - COM CACHE
     // ==========================================
@@ -385,6 +473,30 @@ class AdminController extends Controller
     }
 
     /**
+     * Listar prestadores pendentes
+     * GET /api/admin/prestadores/pendentes
+     */
+    public function prestadoresPendentes()
+    {
+        try {
+            $prestadores = User::where('tipo', 'prestador')
+                ->where('verificado', false)
+                ->orderBy('created_at', 'asc')
+                ->paginate(20);
+
+            return response()->json([
+                'success' => true,
+                'data' => $prestadores
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao listar prestadores pendentes'
+            ], 500);
+        }
+    }
+
+    /**
      * Aprovar prestador - LIMPAR CACHE
      * PUT /api/admin/prestadores/{id}/aprovar
      */
@@ -403,6 +515,13 @@ class AdminController extends Controller
             $prestador->verificado = true;
             $prestador->save();
 
+            // NOTIFICAÇÃO: Prestador aprovado para o PRESTADOR
+            $prestador->notify(new DynamicNotification('prestador_aprovado', [
+                'prestador_nome' => $prestador->nome,
+                'data_aprovacao' => now()->format('d/m/Y'),
+            ]));
+            Log::info("Notificação 'prestador_aprovado' enviada para o prestador ID: {$prestador->id}");
+
             $this->clearAdminCache($id);
 
             return response()->json([
@@ -413,6 +532,50 @@ class AdminController extends Controller
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao aprovar prestador'
+            ], 500);
+        }
+    }
+
+    /**
+     * Reprovar prestador - LIMPAR CACHE
+     * PUT /api/admin/prestadores/{id}/reprovar
+     */
+    public function reprovarPrestador(Request $request, $id)
+    {
+        try {
+            $prestador = User::where('tipo', 'prestador')->find($id);
+
+            if (!$prestador) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Prestador não encontrado'
+                ], 404);
+            }
+
+            $motivo = $request->input('motivo', 'Os documentos enviados não atendem aos requisitos.');
+
+            // NOTIFICAÇÃO: Prestador reprovado para o PRESTADOR
+            $prestador->notify(new DynamicNotification('prestador_reprovado', [
+                'prestador_nome' => $prestador->nome,
+                'motivo' => $motivo,
+                'data_reprovacao' => now()->format('d/m/Y'),
+            ]));
+            Log::info("Notificação 'prestador_reprovado' enviada para o prestador ID: {$prestador->id}");
+
+            // Opcional: deletar ou desativar o prestador
+            $prestador->ativo = false;
+            $prestador->save();
+
+            $this->clearAdminCache($id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Prestador reprovado com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao reprovar prestador'
             ], 500);
         }
     }
@@ -474,7 +637,8 @@ class AdminController extends Controller
                     $query->where('status', $request->status);
                 }
 
-                return $query->orderBy('created_at', 'desc')->paginate(20);
+                $perPage = $request->get('per_page', 20);
+                return $query->orderBy('created_at', 'desc')->paginate($perPage);
             });
 
             return response()->json([
@@ -485,6 +649,118 @@ class AdminController extends Controller
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao listar transações'
+            ], 500);
+        }
+    }
+
+    /**
+     * Detalhes da transação
+     * GET /api/admin/financeiro/transacoes/{id}
+     */
+    public function showTransacao($id)
+    {
+        try {
+            $transacao = Transacao::with('user')->find($id);
+
+            if (!$transacao) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Transação não encontrada'
+                ], 404);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $transacao
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao buscar transação'
+            ], 500);
+        }
+    }
+
+    /**
+     * Criar transação
+     * POST /api/admin/financeiro/transacoes
+     */
+    public function storeTransacao(Request $request)
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'user_id' => 'required|exists:users,id',
+                'valor' => 'required|numeric|min:0',
+                'tipo' => 'required|in:entrada,saida,comissao',
+                'status' => 'required|in:pendente,concluido,cancelado',
+                'descricao' => 'nullable|string',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
+            $transacao = Transacao::create($request->all());
+
+            $this->clearAdminCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Transação criada com sucesso',
+                'data' => $transacao
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao criar transação'
+            ], 500);
+        }
+    }
+
+    /**
+     * Atualizar status da transação
+     * PUT /api/admin/financeiro/transacoes/{id}/status
+     */
+    public function updateTransacaoStatus(Request $request, $id)
+    {
+        try {
+            $transacao = Transacao::find($id);
+
+            if (!$transacao) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Transação não encontrada'
+                ], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'status' => 'required|in:pendente,concluido,cancelado',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
+            $transacao->status = $request->status;
+            $transacao->save();
+
+            $this->clearAdminCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Status atualizado com sucesso',
+                'data' => $transacao
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar status'
             ], 500);
         }
     }
@@ -525,59 +801,357 @@ class AdminController extends Controller
         }
     }
 
-    // ==========================================
-    // 6. NOTIFICAÇÕES DO ADMIN - COM CACHE
-    // ==========================================
-
     /**
-     * Listar notificações do admin - COM CACHE
-     * GET /api/admin/notifications
+     * Detalhes do pedido
+     * GET /api/admin/pedidos/{id}
      */
-    public function notifications()
+    public function showPedido($id)
     {
         try {
-            $notifications = Cache::remember('admin_notifications', 60, function () {
-                // Retorna array vazio por enquanto
-                // TODO: Implementar quando tiver notificações reais
-                return [];
-            });
+            $pedido = Pedido::with(['cliente', 'prestador', 'servico'])->find($id);
+
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
 
             return response()->json([
                 'success' => true,
-                'data' => $notifications
+                'data' => $pedido
             ]);
         } catch (\Exception $e) {
-            Log::error('Notifications ERRO: ' . $e->getMessage());
             return response()->json([
-                'success' => true,
-                'data' => []
-            ], 200);
+                'success' => false,
+                'error' => 'Erro ao buscar pedido'
+            ], 500);
         }
     }
 
     /**
-     * Marcar notificação como lida - LIMPAR CACHE
-     * PUT /api/admin/notifications/{id}/read
+     * Atualizar status do pedido
+     * PUT /api/admin/pedidos/{id}/status
      */
-    public function markNotificationRead($id)
+    public function updatePedidoStatus(Request $request, $id)
     {
-        Cache::forget('admin_notifications');
-        return response()->json(['success' => true]);
+        try {
+            $pedido = Pedido::find($id);
+
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'status' => 'required|in:pendente,aceito,em_andamento,concluido,cancelado',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => $validator->errors()->first()
+                ], 422);
+            }
+
+            $pedido->status = $request->status;
+            $pedido->save();
+
+            $this->clearAdminCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Status do pedido atualizado com sucesso',
+                'data' => $pedido
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar status do pedido'
+            ], 500);
+        }
     }
 
     /**
-     * Marcar todas notificações como lidas - LIMPAR CACHE
-     * PUT /api/admin/notifications/read-all
+     * Cancelar pedido
+     * DELETE /api/admin/pedidos/{id}/cancel
      */
-    public function markAllNotificationsRead()
+    public function cancelPedido($id)
     {
-        Cache::forget('admin_notifications');
-        return response()->json(['success' => true]);
+        try {
+            $pedido = Pedido::find($id);
+
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Pedido não encontrado'
+                ], 404);
+            }
+
+            $pedido->status = 'cancelado';
+            $pedido->save();
+
+            $this->clearAdminCache();
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pedido cancelado com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao cancelar pedido'
+            ], 500);
+        }
     }
 
     // ==========================================
-    // 7. RELATÓRIOS - COM CACHE
+    // 6. NOTIFICAÇÕES DO ADMIN - CORRIGIDO
     // ==========================================
+
+    /**
+     * Listar notificações do admin
+     * GET /api/admin/notifications
+     */
+    /**
+     * Listar notificações do admin
+     * GET /api/admin/notifications
+     */
+    public function notifications(Request $request)
+    {
+        try {
+            $user = $request->user();
+
+            if (!$user || $user->tipo !== 'admin') {
+                return response()->json([
+                    'success' => true,
+                    'data' => []  // ← array vazio, não objeto
+                ]);
+            }
+
+            // Buscar notificações do admin
+            $notifications = $user->notifications()
+                ->orderBy('created_at', 'desc')
+                ->limit(50)
+                ->get()
+                ->map(function ($notif) {
+                    $data = $notif->data ?? [];
+                    return [
+                        'id' => $notif->id,
+                        'tipo' => $data['type'] ?? 'sistema',
+                        'titulo' => $data['titulo'] ?? 'Notificação',
+                        'mensagem' => $data['mensagem'] ?? '',
+                        'lida' => !is_null($notif->read_at),
+                        'created_at' => $notif->created_at->toISOString(),
+                    ];
+                });
+
+            // Garantir que retorna um array
+            return response()->json([
+                'success' => true,
+                'data' => $notifications->toArray()  // ← converter para array
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao carregar notificações admin: ' . $e->getMessage());
+            return response()->json([
+                'success' => true,
+                'data' => []  // ← array vazio
+            ]);
+        }
+    }
+    /**
+     * Marcar notificação como lida
+     * PUT /api/admin/notifications/{id}/read
+     */
+    public function markNotificationRead(Request $request, $id)
+    {
+        try {
+            $user = $request->user();
+
+            if ($user) {
+                $notification = $user->notifications()->where('id', $id)->first();
+                if ($notification) {
+                    $notification->markAsRead();
+                }
+            }
+
+            // Limpar cache
+            Cache::forget('admin_notifications');
+
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao marcar notificação como lida: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * Marcar todas notificações como lidas
+     * PUT /api/admin/notifications/read-all
+     */
+    public function markAllNotificationsRead(Request $request)
+    {
+        try {
+            $user = $request->user();
+
+            if ($user) {
+                $user->unreadNotifications->markAsRead();
+            }
+
+            // Limpar cache
+            Cache::forget('admin_notifications');
+
+            return response()->json(['success' => true]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao marcar todas notificações: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => $e->getMessage()]);
+        }
+    }
+
+    // ==========================================
+    // 7. CONFIGURAÇÕES DO SISTEMA
+    // ==========================================
+
+    /**
+     * Obter configurações do sistema
+     * GET /api/admin/configuracoes
+     */
+    public function configuracoes()
+    {
+        try {
+            $configuracoes = Cache::remember('admin_configuracoes', 3600, function () {
+                return [
+                    'app_name' => config('app.name'),
+                    'app_env' => config('app.env'),
+                    'app_debug' => config('app.debug'),
+                    'comissao_padrao' => config('app.comissao_padrao', 10),
+                    'valor_minimo_saque' => config('app.valor_minimo_saque', 50),
+                    'tempo_maximo_cancelamento' => config('app.tempo_maximo_cancelamento', 60),
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $configuracoes
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao carregar configurações'
+            ], 500);
+        }
+    }
+
+    /**
+     * Atualizar configurações do sistema
+     * PUT /api/admin/configuracoes
+     */
+    public function updateConfiguracoes(Request $request)
+    {
+        try {
+            // Aqui você pode salvar as configurações no banco de dados
+            // Por enquanto, apenas retorna sucesso
+            Cache::forget('admin_configuracoes');
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Configurações atualizadas com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao atualizar configurações'
+            ], 500);
+        }
+    }
+
+    /**
+     * Listar logs do sistema
+     * GET /api/admin/logs
+     */
+    public function logs(Request $request)
+    {
+        try {
+            $limit = $request->get('limit', 100);
+            $logs = [];
+
+            // Caminho do arquivo de log
+            $logFile = storage_path('logs/laravel.log');
+
+            if (file_exists($logFile)) {
+                $content = file_get_contents($logFile);
+                $lines = explode("\n", $content);
+                $lines = array_reverse($lines);
+                $lines = array_slice($lines, 0, $limit);
+
+                foreach ($lines as $line) {
+                    if (preg_match('/\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]/', $line)) {
+                        $logs[] = $line;
+                    }
+                }
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $logs
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao carregar logs'
+            ], 500);
+        }
+    }
+
+    // ==========================================
+    // 8. RELATÓRIOS - COM CACHE
+    // ==========================================
+
+    /**
+     * Relatório de usuários
+     * GET /api/admin/relatorios/usuarios
+     */
+    public function relatorioUsuarios(Request $request)
+    {
+        try {
+            $periodo = $request->get('periodo', 'geral');
+            $cacheKey = "admin_relatorio_usuarios_{$periodo}";
+
+            $relatorio = Cache::remember($cacheKey, 600, function () use ($periodo) {
+                $total = User::count();
+                $clientes = User::where('tipo', 'cliente')->count();
+                $prestadores = User::where('tipo', 'prestador')->count();
+                $admins = User::where('tipo', 'admin')->count();
+                $bloqueados = User::whereNotNull('blocked_at')->count();
+                $ativos = User::whereNull('blocked_at')->count();
+
+                $novosUltimoMes = User::whereMonth('created_at', now()->month)->count();
+
+                return [
+                    'periodo' => $periodo,
+                    'total_usuarios' => $total,
+                    'clientes' => $clientes,
+                    'prestadores' => $prestadores,
+                    'admins' => $admins,
+                    'bloqueados' => $bloqueados,
+                    'ativos' => $ativos,
+                    'novos_ultimo_mes' => $novosUltimoMes,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $relatorio
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório de usuários'
+            ], 500);
+        }
+    }
 
     /**
      * Relatório de prestadores - COM CACHE
@@ -685,8 +1259,64 @@ class AdminController extends Controller
         }
     }
 
+    /**
+     * Relatório financeiro
+     * GET /api/admin/relatorios/financeiro
+     */
+    public function relatorioFinanceiro(Request $request)
+    {
+        try {
+            $periodo = $request->get('periodo', 'mes');
+            $cacheKey = "admin_relatorio_financeiro_{$periodo}";
+
+            $relatorio = Cache::remember($cacheKey, 300, function () use ($periodo) {
+                $query = Transacao::query();
+
+                switch ($periodo) {
+                    case 'hoje':
+                        $query->whereDate('created_at', today());
+                        break;
+                    case 'semana':
+                        $query->whereBetween('created_at', [now()->startOfWeek(), now()->endOfWeek()]);
+                        break;
+                    case 'mes':
+                        $query->whereMonth('created_at', now()->month);
+                        break;
+                    case 'ano':
+                        $query->whereYear('created_at', now()->year);
+                        break;
+                }
+
+                $totalEntradas = (clone $query)->where('tipo', 'entrada')->where('status', 'concluido')->sum('valor');
+                $totalSaidas = (clone $query)->where('tipo', 'saida')->where('status', 'concluido')->sum('valor');
+                $totalComissoes = (clone $query)->where('tipo', 'comissao')->where('status', 'concluido')->sum('valor');
+                $saldoLiquido = $totalEntradas - $totalSaidas - $totalComissoes;
+                $pendentes = (clone $query)->where('status', 'pendente')->sum('valor');
+
+                return [
+                    'periodo' => $periodo,
+                    'total_entradas' => $totalEntradas,
+                    'total_saidas' => $totalSaidas,
+                    'total_comissoes' => $totalComissoes,
+                    'saldo_liquido' => $saldoLiquido,
+                    'pendentes' => $pendentes,
+                ];
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $relatorio
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao gerar relatório financeiro'
+            ], 500);
+        }
+    }
+
     // ==========================================
-    // 8. MÉTODOS AUXILIARES
+    // 9. MÉTODOS AUXILIARES
     // ==========================================
 
     /**
@@ -699,6 +1329,7 @@ class AdminController extends Controller
         Cache::forget('admin_stats');
         Cache::forget('admin_resumo_financeiro');
         Cache::forget('admin_notifications');
+        Cache::forget('admin_configuracoes');
 
         if ($userId) {
             Cache::forget("admin_user_{$userId}");
@@ -717,6 +1348,8 @@ class AdminController extends Controller
         foreach ($periodos as $periodo) {
             Cache::forget("admin_relatorio_servicos_{$periodo}");
             Cache::forget("admin_relatorio_prestadores_{$periodo}");
+            Cache::forget("admin_relatorio_usuarios_{$periodo}");
+            Cache::forget("admin_relatorio_financeiro_{$periodo}");
         }
     }
 }

@@ -9,13 +9,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Notifications\DynamicNotification;
 
 class PropostaController extends Controller
 {
-    /**
-     * Prestador envia proposta para um pedido
-     * POST /api/prestador/propostas
-     */
     /**
      * Prestador envia proposta para um pedido
      * POST /api/prestador/propostas
@@ -47,7 +44,7 @@ class PropostaController extends Controller
 
         $pedido = Pedido::find($request->pedido_id);
 
-        // ✅ CORRIGIDO: Verificar se o pedido está pendente (não 'aberto')
+        // Verificar se o pedido está pendente
         if ($pedido->status !== 'pendente') {
             return response()->json([
                 'success' => false,
@@ -68,6 +65,8 @@ class PropostaController extends Controller
         }
 
         try {
+            DB::beginTransaction();
+
             $proposta = Proposta::create([
                 'pedido_id' => $pedido->id,
                 'prestador_id' => $prestador->id,
@@ -76,12 +75,27 @@ class PropostaController extends Controller
                 'status' => 'pendente',
             ]);
 
+            // ✅ NOTIFICAÇÃO 1: Nova proposta para o CLIENTE
+            $cliente = $pedido->cliente;
+            if ($cliente) {
+                $cliente->notify(new DynamicNotification('nova_proposta', [
+                    'prestador_nome' => $prestador->nome,
+                    'valor' => number_format($request->valor, 2, ',', '.'),
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'nova_proposta' enviada para o cliente ID: {$cliente->id}");
+            }
+
+            DB::commit();
+
             return response()->json([
                 'success' => true,
                 'message' => 'Proposta enviada com sucesso!',
                 'data' => $proposta
             ], 201);
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Erro ao criar proposta: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
@@ -123,8 +137,8 @@ class PropostaController extends Controller
             ], 422);
         }
 
-        // Verificar se o pedido ainda está aberto
-        if ($proposta->pedido->status !== 'aberto') {
+        // Verificar se o pedido está pendente
+        if ($proposta->pedido->status !== 'pendente') {
             return response()->json([
                 'success' => false,
                 'message' => 'Este pedido já não está disponível'
@@ -150,6 +164,18 @@ class PropostaController extends Controller
                 ->where('id', '!=', $id)
                 ->where('status', 'pendente')
                 ->update(['status' => 'recusada']);
+
+            // ✅ NOTIFICAÇÃO 2: Proposta aceita para o PRESTADOR
+            $prestador = $proposta->prestador;
+            if ($prestador) {
+                $prestador->notify(new DynamicNotification('solicitacao_aceita', [
+                    'cliente_nome' => $cliente->nome,
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'valor' => number_format($proposta->valor, 2, ',', '.'),
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'solicitacao_aceita' enviada para o prestador ID: {$prestador->id}");
+            }
 
             DB::commit();
 
@@ -205,14 +231,30 @@ class PropostaController extends Controller
         }
 
         try {
+            DB::beginTransaction();
+
             $proposta->status = 'recusada';
             $proposta->save();
+
+            // ✅ NOTIFICAÇÃO 3: Proposta recusada para o PRESTADOR
+            $prestador = $proposta->prestador;
+            if ($prestador) {
+                $prestador->notify(new DynamicNotification('solicitacao_recusada', [
+                    'cliente_nome' => $cliente->nome,
+                    'pedido_numero' => $proposta->pedido->numero ?? $proposta->pedido->id,
+                    'pedido_id' => $proposta->pedido->id,
+                ]));
+                Log::info("Notificação 'solicitacao_recusada' enviada para o prestador ID: {$prestador->id}");
+            }
+
+            DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Proposta recusada'
             ]);
         } catch (\Exception $e) {
+            DB::rollBack();
             Log::error('Erro ao recusar proposta: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
@@ -273,13 +315,16 @@ class PropostaController extends Controller
     {
         $prestador = $request->user();
 
+        // Buscar TODAS as categorias que o prestador atende
+        $categoriasDoPrestador = $prestador->categorias()->pluck('categorias.id');
+
         // Buscar pedidos que o prestador AINDA NÃO fez proposta
         $pedidos = Pedido::where('status', 'pendente')
             ->whereDoesntHave('propostas', function ($query) use ($prestador) {
                 $query->where('prestador_id', $prestador->id);
             })
-            // Opcional: filtrar por categorias que o prestador atende
-            ->whereIn('categoria_id', $prestador->categorias()->pluck('categorias.id'))
+            // Filtrar por categorias que o prestador atende (suporta múltiplas categorias)
+            ->whereIn('categoria_id', $categoriasDoPrestador)
             ->orderBy('created_at', 'desc')
             ->paginate(20);
 
