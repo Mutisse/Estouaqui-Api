@@ -27,11 +27,15 @@ WORKDIR /var/www/html
 # Copy application files
 COPY . .
 
-# Configure Apache to serve from public directory
+# CORREÇÃO: Configurar Apache para servir a pasta /public
 RUN sed -i 's!/var/www/html!/var/www/html/public!g' /etc/apache2/sites-available/000-default.conf
 
-# Enable .htaccess override
-RUN sed -i '/<Directory \/var\/www\/html\/public>/c\<Directory /var/www/html/public>\n\tOptions Indexes FollowSymLinks\n\tAllowOverride All\n\tRequire all granted\n</Directory>' /etc/apache2/apache2.conf
+# CORREÇÃO: Configurar permissões do diretório (versão simplificada)
+RUN echo "<Directory /var/www/html/public>" >> /etc/apache2/apache2.conf
+RUN echo "    Options Indexes FollowSymLinks" >> /etc/apache2/apache2.conf
+RUN echo "    AllowOverride All" >> /etc/apache2/apache2.conf
+RUN echo "    Require all granted" >> /etc/apache2/apache2.conf
+RUN echo "</Directory>" >> /etc/apache2/apache2.conf
 
 # Install PHP dependencies
 RUN composer install --no-interaction --optimize-autoloader --no-dev
@@ -42,8 +46,11 @@ RUN chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
 # Generate key
 RUN php artisan key:generate
+
+# Cache configs
 RUN php artisan config:cache
 
 EXPOSE 80
 
+# Start Apache
 CMD ["apache2-foreground"]
