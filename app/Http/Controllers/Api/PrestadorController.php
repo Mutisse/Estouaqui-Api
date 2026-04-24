@@ -32,9 +32,8 @@ class PrestadorController extends Controller
     // ==========================================
     // 1. REGISTRO DO PRESTADOR - CORRIGIDO
     // ==========================================
-
     /**
-     * Registro de novo prestador
+     * Registro de novo prestador - CORRIGIDO (salva categorias corretamente)
      * POST /api/register/prestador
      */
     public function register(Request $request)
@@ -68,6 +67,19 @@ class PrestadorController extends Controller
         }
 
         try {
+            // Processar categorias ANTES de criar o usuário
+            $categoriasIds = [];
+            if ($request->categorias) {
+                $categoriasData = is_string($request->categorias)
+                    ? json_decode($request->categorias, true)
+                    : $request->categorias;
+
+                if (is_array($categoriasData)) {
+                    $categoriasIds = $categoriasData;
+                }
+            }
+
+            // Processar portfolio
             $portfolioPaths = [];
             for ($i = 0; $i < 3; $i++) {
                 if ($request->hasFile("portfolio.{$i}")) {
@@ -78,6 +90,15 @@ class PrestadorController extends Controller
                 }
             }
 
+            // Processar disponibilidade
+            $disponibilidadeData = [];
+            if ($request->disponibilidade) {
+                $disponibilidadeData = is_string($request->disponibilidade)
+                    ? json_decode($request->disponibilidade, true)
+                    : $request->disponibilidade;
+            }
+
+            // Criar usuário
             $userData = [
                 'nome' => $request->nome,
                 'email' => $request->email,
@@ -91,10 +112,10 @@ class PrestadorController extends Controller
                 'longitude' => $request->longitude,
                 'preferences' => json_encode([
                     'descricao' => $request->descricao,
-                    'categorias' => json_decode($request->categorias, true),
+                    'categorias' => $categoriasIds,
                     'portfolio' => $portfolioPaths,
                     'raio' => $request->raio,
-                    'disponibilidade' => json_decode($request->disponibilidade, true),
+                    'disponibilidade' => $disponibilidadeData,
                 ]),
             ];
 
@@ -109,6 +130,42 @@ class PrestadorController extends Controller
             }
 
             $user = User::create($userData);
+
+            // ✅ SALVAR CATEGORIAS NA TABELA PRESTADOR_CATEGORIAS
+            if (!empty($categoriasIds)) {
+                foreach ($categoriasIds as $categoriaId) {
+                    // Verificar se a categoria existe
+                    $categoria = Categoria::find($categoriaId);
+                    if ($categoria) {
+                        DB::table('prestador_categorias')->insert([
+                            'user_id' => $user->id,
+                            'categoria_id' => $categoriaId,
+                            'created_at' => now(),
+                            'updated_at' => now(),
+                        ]);
+                    }
+                }
+                Log::info("Categorias salvas para prestador {$user->id}: " . implode(', ', $categoriasIds));
+            }
+
+            // ✅ SALVAR DISPONIBILIDADE NA TABELA PRESTADOR_DISPONIBILIDADE
+            if (!empty($disponibilidadeData)) {
+                PrestadorDisponibilidade::updateOrCreate(
+                    ['prestador_id' => $user->id],
+                    [
+                        'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
+                        'horarios_padrao' => $disponibilidadeData,
+                        'intervalos_padrao' => [],
+                        'ativo' => true,
+                    ]
+                );
+            }
+
+            // ✅ SALVAR RAIO DE ATUAÇÃO
+            if ($request->raio) {
+                $user->update(['raio_atuacao' => $request->raio]);
+            }
+
             $token = $user->createToken('auth_token')->plainTextToken;
 
             return response()->json([
@@ -123,6 +180,7 @@ class PrestadorController extends Controller
                     'profissao' => $user->profissao,
                     'latitude' => $user->latitude,
                     'longitude' => $user->longitude,
+                    'categorias' => $categoriasIds,
                 ],
                 'token' => $token
             ], 201);

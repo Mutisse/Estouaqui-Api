@@ -52,6 +52,15 @@ class PropostaController extends Controller
             ], 422);
         }
 
+        // Verificar se o prestador atende a categoria do pedido
+        $categoriasDoPrestador = $prestador->categorias()->pluck('categorias.id')->toArray();
+        if (!in_array($pedido->categoria_id, $categoriasDoPrestador)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Você não atende a categoria deste serviço'
+            ], 422);
+        }
+
         // Verificar se já enviou proposta para este pedido
         $existe = Proposta::where('pedido_id', $pedido->id)
             ->where('prestador_id', $prestador->id)
@@ -75,7 +84,7 @@ class PropostaController extends Controller
                 'status' => 'pendente',
             ]);
 
-            // ✅ NOTIFICAÇÃO 1: Nova proposta para o CLIENTE
+            // ✅ NOTIFICAÇÃO: Nova proposta para o CLIENTE
             $cliente = $pedido->cliente;
             if ($cliente) {
                 $cliente->notify(new DynamicNotification('nova_proposta', [
@@ -99,7 +108,7 @@ class PropostaController extends Controller
             Log::error('Erro ao criar proposta: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao enviar proposta'
+                'message' => 'Erro ao enviar proposta: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -165,7 +174,7 @@ class PropostaController extends Controller
                 ->where('status', 'pendente')
                 ->update(['status' => 'recusada']);
 
-            // ✅ NOTIFICAÇÃO 2: Proposta aceita para o PRESTADOR
+            // ✅ NOTIFICAÇÃO: Proposta aceita para o PRESTADOR
             $prestador = $proposta->prestador;
             if ($prestador) {
                 $prestador->notify(new DynamicNotification('solicitacao_aceita', [
@@ -192,7 +201,7 @@ class PropostaController extends Controller
             Log::error('Erro ao aceitar proposta: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao aceitar proposta'
+                'message' => 'Erro ao aceitar proposta: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -236,7 +245,7 @@ class PropostaController extends Controller
             $proposta->status = 'recusada';
             $proposta->save();
 
-            // ✅ NOTIFICAÇÃO 3: Proposta recusada para o PRESTADOR
+            // ✅ NOTIFICAÇÃO: Proposta recusada para o PRESTADOR
             $prestador = $proposta->prestador;
             if ($prestador) {
                 $prestador->notify(new DynamicNotification('solicitacao_recusada', [
@@ -258,7 +267,7 @@ class PropostaController extends Controller
             Log::error('Erro ao recusar proposta: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao recusar proposta'
+                'message' => 'Erro ao recusar proposta: ' . $e->getMessage()
             ], 500);
         }
     }
@@ -275,10 +284,32 @@ class PropostaController extends Controller
             $query->where('cliente_id', $cliente->id);
         })
             ->with(['prestador' => function ($q) {
-                $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao');
+                $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao', 'latitude', 'longitude');
             }, 'pedido'])
             ->orderBy('created_at', 'desc')
-            ->get();
+            ->get()
+            ->map(function ($proposta) {
+                return [
+                    'id' => $proposta->id,
+                    'valor' => (float) $proposta->valor,
+                    'mensagem' => $proposta->mensagem,
+                    'status' => $proposta->status,
+                    'created_at' => $proposta->created_at->toISOString(),
+                    'prestador' => $proposta->prestador ? [
+                        'id' => $proposta->prestador->id,
+                        'nome' => $proposta->prestador->nome,
+                        'foto' => $proposta->prestador->foto ? asset('storage/' . $proposta->prestador->foto) : null,
+                        'telefone' => $proposta->prestador->telefone,
+                        'media_avaliacao' => (float) ($proposta->prestador->media_avaliacao ?? 0),
+                    ] : null,
+                    'pedido' => $proposta->pedido ? [
+                        'id' => $proposta->pedido->id,
+                        'descricao' => $proposta->pedido->descricao,
+                        'endereco' => $proposta->pedido->endereco,
+                        'status' => $proposta->pedido->status,
+                    ] : null,
+                ];
+            });
 
         return response()->json([
             'success' => true,
@@ -296,10 +327,34 @@ class PropostaController extends Controller
 
         $propostas = Proposta::where('prestador_id', $prestador->id)
             ->with(['pedido' => function ($q) {
-                $q->select('id', 'numero', 'descricao', 'endereco', 'status', 'created_at');
+                $q->select('id', 'numero', 'descricao', 'endereco', 'status', 'created_at', 'categoria_id')
+                    ->with('categoria:id,nome,icone,cor');
             }])
             ->orderBy('created_at', 'desc')
-            ->get();
+            ->get()
+            ->map(function ($proposta) {
+                return [
+                    'id' => $proposta->id,
+                    'valor' => (float) $proposta->valor,
+                    'mensagem' => $proposta->mensagem,
+                    'status' => $proposta->status,
+                    'created_at' => $proposta->created_at->toISOString(),
+                    'pedido' => $proposta->pedido ? [
+                        'id' => $proposta->pedido->id,
+                        'numero' => $proposta->pedido->numero,
+                        'descricao' => $proposta->pedido->descricao,
+                        'endereco' => $proposta->pedido->endereco,
+                        'status' => $proposta->pedido->status,
+                        'created_at' => $proposta->pedido->created_at->toISOString(),
+                        'categoria' => $proposta->pedido->categoria ? [
+                            'id' => $proposta->pedido->categoria->id,
+                            'nome' => $proposta->pedido->categoria->nome,
+                            'icone' => $proposta->pedido->categoria->icone,
+                            'cor' => $proposta->pedido->categoria->cor,
+                        ] : null,
+                    ] : null,
+                ];
+            });
 
         return response()->json([
             'success' => true,
@@ -315,22 +370,199 @@ class PropostaController extends Controller
     {
         $prestador = $request->user();
 
-        // Buscar TODAS as categorias que o prestador atende
-        $categoriasDoPrestador = $prestador->categorias()->pluck('categorias.id');
+        // Parâmetros de filtro
+        $categoriaId = $request->query('categoria_id');
+        $raioKm = $request->query('raio_km', 10);
+        $ordenarPor = $request->query('ordenar_por', 'distancia');
+        $perPage = $request->query('per_page', 20);
+        $page = $request->query('page', 1);
 
-        // Buscar pedidos que o prestador AINDA NÃO fez proposta
-        $pedidos = Pedido::where('status', 'pendente')
-            ->whereDoesntHave('propostas', function ($query) use ($prestador) {
-                $query->where('prestador_id', $prestador->id);
+        // 1. Buscar categorias que o prestador atende
+        $categoriasDoPrestador = $prestador->categorias()
+            ->pluck('categorias.id')
+            ->toArray();
+
+        // Se o prestador não tem categorias, retorna vazio
+        if (empty($categoriasDoPrestador)) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'pedidos' => [],
+                    'filtros' => [
+                        'categorias_disponiveis' => [],
+                        'categoria_selecionada' => $categoriaId,
+                        'raio_km' => (float) $raioKm,
+                        'ordenar_por' => $ordenarPor,
+                        'tem_localizacao' => false,
+                    ],
+                    'paginacao' => [
+                        'current_page' => (int) $page,
+                        'per_page' => (int) $perPage,
+                        'total' => 0,
+                        'total_pages' => 0,
+                    ]
+                ],
+                'message' => 'Você ainda não definiu suas categorias de atuação'
+            ]);
+        }
+
+        // Aplicar filtro de categoria específica se enviado
+        $categoriasFiltro = $categoriaId
+            ? (in_array($categoriaId, $categoriasDoPrestador) ? [$categoriaId] : [])
+            : $categoriasDoPrestador;
+
+        if (empty($categoriasFiltro)) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'pedidos' => [],
+                    'filtros' => [
+                        'categorias_disponiveis' => $categoriasDoPrestador,
+                        'categoria_selecionada' => $categoriaId,
+                        'raio_km' => (float) $raioKm,
+                        'ordenar_por' => $ordenarPor,
+                        'tem_localizacao' => !empty($prestador->latitude),
+                    ],
+                    'paginacao' => [
+                        'current_page' => (int) $page,
+                        'per_page' => (int) $perPage,
+                        'total' => 0,
+                        'total_pages' => 0,
+                    ]
+                ],
+                'message' => 'Categoria selecionada não está nas suas áreas de atuação'
+            ]);
+        }
+
+        // 2. Buscar pedidos pendentes
+        $query = Pedido::where('status', 'pendente')
+            ->whereDoesntHave('propostas', function ($q) use ($prestador) {
+                $q->where('prestador_id', $prestador->id);
             })
-            // Filtrar por categorias que o prestador atende (suporta múltiplas categorias)
-            ->whereIn('categoria_id', $categoriasDoPrestador)
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
+            ->whereIn('categoria_id', $categoriasFiltro)
+            ->with(['cliente' => function ($q) {
+                $q->select('id', 'nome', 'foto', 'telefone', 'latitude', 'longitude');
+            }, 'categoria']);
+
+        // 3. Buscar pedidos
+        $pedidos = $query->get();
+
+        // 4. Calcular distância para cada pedido
+        $prestadorLat = $prestador->latitude;
+        $prestadorLng = $prestador->longitude;
+        $temLocalizacao = !empty($prestadorLat) && !empty($prestadorLng);
+
+        foreach ($pedidos as $pedido) {
+            $pedido->distancia_km = null;
+
+            if ($temLocalizacao && $pedido->cliente && $pedido->cliente->latitude && $pedido->cliente->longitude) {
+                $pedido->distancia_km = $this->calcularDistancia(
+                    (float) $prestadorLat,
+                    (float) $prestadorLng,
+                    (float) $pedido->cliente->latitude,
+                    (float) $pedido->cliente->longitude
+                );
+            }
+        }
+
+        // 5. Filtrar por raio de distância
+        if ($temLocalizacao && $raioKm > 0) {
+            $pedidos = $pedidos->filter(function ($pedido) use ($raioKm) {
+                if ($pedido->distancia_km === null) {
+                    return true;
+                }
+                return $pedido->distancia_km <= $raioKm;
+            });
+        }
+
+        // 6. Ordenar resultados
+        if ($ordenarPor === 'distancia' && $temLocalizacao) {
+            $pedidos = $pedidos->sortBy(function ($pedido) {
+                return $pedido->distancia_km ?? PHP_FLOAT_MAX;
+            });
+        } elseif ($ordenarPor === 'valor') {
+            $pedidos = $pedidos->sortBy('valor');
+        } else {
+            $pedidos = $pedidos->sortByDesc('created_at');
+        }
+
+        // 7. Paginar
+        $paginated = $pedidos->forPage($page, $perPage)->values();
+
+        // 8. Formatar resposta
+        $result = $paginated->map(function ($pedido) {
+            $distancia = $pedido->distancia_km;
+            $distanciaTexto = $distancia !== null
+                ? ($distancia < 1
+                    ? round($distancia * 1000) . 'm'
+                    : round($distancia, 1) . 'km')
+                : null;
+
+            return [
+                'id' => (int) $pedido->id,
+                'descricao' => (string) $pedido->descricao,
+                'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,
+                'endereco' => (string) $pedido->endereco,
+                'created_at' => $pedido->created_at->toISOString(),
+                'distancia_km' => $distancia,
+                'distancia_texto' => $distanciaTexto,
+                'categoria' => $pedido->categoria ? [
+                    'id' => (int) $pedido->categoria->id,
+                    'nome' => (string) $pedido->categoria->nome,
+                    'icone' => (string) $pedido->categoria->icone,
+                    'cor' => (string) $pedido->categoria->cor,
+                ] : null,
+                'cliente' => $pedido->cliente ? [
+                    'id' => (int) $pedido->cliente->id,
+                    'nome' => (string) $pedido->cliente->nome,
+                    'foto' => $pedido->cliente->foto ? asset('storage/' . $pedido->cliente->foto) : null,
+                ] : null,
+            ];
+        });
 
         return response()->json([
             'success' => true,
-            'data' => $pedidos
+            'data' => [
+                'pedidos' => $result,
+                'filtros' => [
+                    'categorias_disponiveis' => $categoriasDoPrestador,
+                    'categoria_selecionada' => $categoriaId,
+                    'raio_km' => (float) $raioKm,
+                    'ordenar_por' => $ordenarPor,
+                    'tem_localizacao' => $temLocalizacao,
+                ],
+                'paginacao' => [
+                    'current_page' => (int) $page,
+                    'per_page' => (int) $perPage,
+                    'total' => $pedidos->count(),
+                    'total_pages' => ceil($pedidos->count() / $perPage),
+                ]
+            ],
         ]);
+    }
+
+    /**
+     * Calcular distância entre dois pontos (Haversine formula)
+     *
+     * @param float $lat1 Latitude do ponto 1
+     * @param float $lon1 Longitude do ponto 1
+     * @param float $lat2 Latitude do ponto 2
+     * @param float $lon2 Longitude do ponto 2
+     * @return float Distância em quilômetros
+     */
+    private function calcularDistancia($lat1, $lon1, $lat2, $lon2)
+    {
+        $earthRadius = 6371; // Raio da Terra em km
+
+        $latDelta = deg2rad($lat2 - $lat1);
+        $lonDelta = deg2rad($lon2 - $lon1);
+
+        $a = sin($latDelta / 2) * sin($latDelta / 2) +
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($lonDelta / 2) * sin($lonDelta / 2);
+
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
+        return round($earthRadius * $c, 2);
     }
 }
