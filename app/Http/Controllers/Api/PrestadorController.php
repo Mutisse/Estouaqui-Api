@@ -36,6 +36,10 @@ class PrestadorController extends Controller
      * Registro de novo prestador - CORRIGIDO (salva categorias corretamente)
      * POST /api/register/prestador
      */
+    /**
+     * Registro de novo prestador - CORRIGIDO (salva categorias corretamente)
+     * POST /api/register/prestador
+     */
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -67,16 +71,24 @@ class PrestadorController extends Controller
         }
 
         try {
-            // Processar categorias ANTES de criar o usuário
+            // ✅ PROCESSAR CATEGORIAS - CORRIGIDO
             $categoriasIds = [];
             if ($request->categorias) {
+                // Decodificar o JSON que vem do frontend
                 $categoriasData = is_string($request->categorias)
                     ? json_decode($request->categorias, true)
                     : $request->categorias;
 
                 if (is_array($categoriasData)) {
-                    $categoriasIds = $categoriasData;
+                    // Caso venha como array de objetos com 'value' (formato do q-select)
+                    if (isset($categoriasData[0]['value'])) {
+                        $categoriasIds = array_column($categoriasData, 'value');
+                    } else {
+                        $categoriasIds = $categoriasData;
+                    }
                 }
+
+                Log::info('📌 Categorias recebidas: ', $categoriasIds);
             }
 
             // Processar portfolio
@@ -131,21 +143,29 @@ class PrestadorController extends Controller
 
             $user = User::create($userData);
 
-            // ✅ SALVAR CATEGORIAS NA TABELA PRESTADOR_CATEGORIAS
+            // ✅ SALVAR CATEGORIAS NA TABELA PRESTADOR_CATEGORIAS - CORRIGIDO
             if (!empty($categoriasIds)) {
+                $categoriasSalvas = 0;
                 foreach ($categoriasIds as $categoriaId) {
                     // Verificar se a categoria existe
                     $categoria = Categoria::find($categoriaId);
                     if ($categoria) {
-                        DB::table('prestador_categorias')->insert([
-                            'user_id' => $user->id,
-                            'categoria_id' => $categoriaId,
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ]);
+                        DB::table('prestador_categorias')->updateOrInsert(
+                            [
+                                'user_id' => $user->id,
+                                'categoria_id' => $categoriaId,
+                            ],
+                            [
+                                'created_at' => now(),
+                                'updated_at' => now(),
+                            ]
+                        );
+                        $categoriasSalvas++;
                     }
                 }
-                Log::info("Categorias salvas para prestador {$user->id}: " . implode(', ', $categoriasIds));
+                Log::info("✅ Categorias salvas para prestador {$user->id}: {$categoriasSalvas} de " . count($categoriasIds));
+            } else {
+                Log::warning("⚠️ Nenhuma categoria para salvar para prestador {$user->id}");
             }
 
             // ✅ SALVAR DISPONIBILIDADE NA TABELA PRESTADOR_DISPONIBILIDADE
@@ -691,6 +711,10 @@ class PrestadorController extends Controller
      * Listar prestadores (público)
      * GET /api/prestadores
      */
+    /**
+     * Listar prestadores (público)
+     * GET /api/prestadores
+     */
     public function index(Request $request)
     {
         $cacheKey = "prestadores_list_" . md5($request->fullUrl());
@@ -698,7 +722,7 @@ class PrestadorController extends Controller
         $prestadores = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($request) {
             $query = User::where('tipo', 'prestador')
                 ->where('ativo', true)
-                ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo']);
+                ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo', 'preferences']);
 
             if ($request->has('categoria')) {
                 $query->whereHas('categorias', function ($q) use ($request) {
@@ -718,12 +742,21 @@ class PrestadorController extends Controller
                 $categoriasPorPrestador = DB::table('prestador_categorias')
                     ->whereIn('user_id', $prestadorIds)
                     ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
-                    ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome')
+                    ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor')
                     ->get()
                     ->groupBy('user_id');
             }
 
             return $prestadores->map(function ($prestador) use ($categoriasPorPrestador) {
+                // ✅ EXTRAIR PORTFOLIO
+                $portfolio = [];
+                $preferences = json_decode($prestador->preferences, true);
+                if (isset($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+                    $portfolio = array_map(function ($path) {
+                        return asset('storage/' . $path);
+                    }, $preferences['portfolio']);
+                }
+
                 return [
                     'id' => (int) $prestador->id,
                     'nome' => (string) $prestador->nome,
@@ -736,10 +769,13 @@ class PrestadorController extends Controller
                     'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
                     'verificado' => (bool) ($prestador->verificado ?? false),
                     'disponivel' => (bool) ($prestador->ativo ?? true),
+                    'portfolio' => $portfolio,  // ✅ ADICIONADO
                     'categorias' => isset($categoriasPorPrestador[$prestador->id])
                         ? $categoriasPorPrestador[$prestador->id]->map(fn($c) => [
                             'id' => (int) $c->id,
                             'nome' => (string) $c->nome,
+                            'icone' => (string) ($c->icone ?? 'category'),
+                            'cor' => (string) ($c->cor ?? 'primary'),
                         ])->values()->toArray()
                         : [],
                 ];
@@ -751,7 +787,10 @@ class PrestadorController extends Controller
             'data' => $prestadores
         ]);
     }
-
+    /**
+     * Detalhes do prestador (público)
+     * GET /api/prestadores/{id}
+     */
     /**
      * Detalhes do prestador (público)
      * GET /api/prestadores/{id}
@@ -763,11 +802,20 @@ class PrestadorController extends Controller
         $dados = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($id) {
             try {
                 $prestador = User::where('tipo', 'prestador')
-                    ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo', 'created_at'])
+                    ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo', 'created_at', 'preferences'])
                     ->find($id);
 
                 if (!$prestador) {
                     return null;
+                }
+
+                // ✅ EXTRAIR PORTFOLIO DO CAMPO PREFERENCES
+                $portfolio = [];
+                $preferences = json_decode($prestador->preferences, true);
+                if (isset($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+                    $portfolio = array_map(function ($path) {
+                        return asset('storage/' . $path);
+                    }, $preferences['portfolio']);
                 }
 
                 $servicos = Servico::where('prestador_id', $id)
@@ -784,11 +832,13 @@ class PrestadorController extends Controller
                     ])->toArray();
 
                 $categorias = $prestador->categorias()
-                    ->select(['categorias.id', 'categorias.nome'])
+                    ->select(['categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor'])
                     ->get()
                     ->map(fn($cat) => [
                         'id' => (int) $cat->id,
                         'nome' => (string) $cat->nome,
+                        'icone' => (string) ($cat->icone ?? 'category'),
+                        'cor' => (string) ($cat->cor ?? 'primary'),
                     ])->toArray();
 
                 $avaliacoes = Avaliacao::where('prestador_id', $id)
@@ -824,6 +874,7 @@ class PrestadorController extends Controller
                     'categorias' => $categorias,
                     'servicos' => $servicos,
                     'avaliacoes' => $avaliacoes,
+                    'portfolio' => $portfolio,  // ✅ ADICIONADO PORTFOLIO
                     'created_at' => $prestador->created_at?->toISOString(),
                 ];
             } catch (\Exception $e) {
@@ -943,12 +994,112 @@ class PrestadorController extends Controller
      * Prestadores próximos (público)
      * GET /api/prestadores/proximos
      */
+    /**
+     * Prestadores próximos (público)
+     * GET /api/prestadores/proximos
+     */
     public function proximos(Request $request)
     {
+        $latitude = $request->query('latitude');
+        $longitude = $request->query('longitude');
+        $radius = $request->query('radius', 10); // Raio padrão de 10km
+        $categoria = $request->query('categoria');
+        $busca = $request->query('busca');
+
+        if (!$latitude || !$longitude) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Latitude e longitude são obrigatórias'
+            ], 422);
+        }
+
+        $query = User::where('tipo', 'prestador')
+            ->where('ativo', true)
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->with('categorias');
+
+        // Filtrar por categoria
+        if ($categoria) {
+            $query->whereHas('categorias', function ($q) use ($categoria) {
+                $q->where('categoria_id', $categoria);
+            });
+        }
+
+        // Busca por nome
+        if ($busca) {
+            $query->where('nome', 'like', '%' . $busca . '%');
+        }
+
+        $prestadores = $query->get();
+
+        // Calcular distância e filtrar por raio
+        $prestadoresComDistancia = $prestadores->map(function ($prestador) use ($latitude, $longitude) {
+            $distancia = $this->calcularDistancia(
+                $latitude,
+                $longitude,
+                $prestador->latitude,
+                $prestador->longitude
+            );
+
+            return [
+                'id' => (int) $prestador->id,
+                'nome' => (string) $prestador->nome,
+                'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                'profissao' => (string) ($prestador->profissao ?? 'Prestador de Serviços'),
+                'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
+                'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
+                'distancia' => round($distancia, 2),
+                'latitude' => (float) $prestador->latitude,
+                'longitude' => (float) $prestador->longitude,
+                'verificado' => (bool) ($prestador->verificado ?? false),
+                'disponivel' => (bool) ($prestador->ativo ?? true),
+                'categorias' => $prestador->categorias->map(function ($cat) {
+                    return [
+                        'id' => (int) $cat->id,
+                        'nome' => (string) $cat->nome,
+                        'icone' => (string) ($cat->icone ?? 'category'),
+                        'cor' => (string) ($cat->cor ?? 'primary'),
+                    ];
+                })->values()->toArray(),
+            ];
+        })->filter(function ($prestador) use ($radius) {
+            return $prestador['distancia'] <= $radius;
+        })->values();
+
         return response()->json([
             'success' => true,
-            'data' => []
+            'data' => $prestadoresComDistancia,
+            'meta' => [
+                'count' => $prestadoresComDistancia->count(),
+                'radius' => (float) $radius,
+                'latitude' => (float) $latitude,
+                'longitude' => (float) $longitude,
+            ]
         ]);
+    }
+
+    /**
+     * Calcular distância entre dois pontos (Haversine formula)
+     */
+    private function calcularDistancia($lat1, $lon1, $lat2, $lon2)
+    {
+        if (!$lat1 || !$lon1 || !$lat2 || !$lon2) {
+            return 9999;
+        }
+
+        $earthRadius = 6371; // km
+
+        $latDelta = deg2rad($lat2 - $lat1);
+        $lonDelta = deg2rad($lon2 - $lon1);
+
+        $a = sin($latDelta / 2) * sin($latDelta / 2) +
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($lonDelta / 2) * sin($lonDelta / 2);
+
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+
+        return $earthRadius * $c;
     }
 
     /**

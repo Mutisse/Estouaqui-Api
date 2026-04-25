@@ -143,9 +143,14 @@ Route::middleware('auth:sanctum')->group(function () {
     // 12. NOTIFICAÇÕES
     // ==========================================
     Route::prefix('notifications')->group(function () {
-        Route::get('/', [UsuarioController::class, 'notifications']);
-        Route::put('/read-all', [UsuarioController::class, 'markAllNotificationsRead']);
-        Route::put('/{id}/read', [UsuarioController::class, 'markNotificationRead']);
+        // Notificações otimizadas
+        Route::get('/notifications', [UsuarioController::class, 'notifications']);
+        Route::get('/notifications/recent', [UsuarioController::class, 'recentNotifications']);
+        Route::get('/notifications/unread-count', [UsuarioController::class, 'unreadCount']);
+        Route::put('/notifications/{id}/read', [UsuarioController::class, 'markNotificationRead']);
+        Route::put('/notifications/read-all', [UsuarioController::class, 'markAllNotificationsRead']);
+        // Admin: Criar índices (executar uma vez)
+        Route::post('/notifications/create-indexes', [UsuarioController::class, 'createIndexes']);
     });
 
     // ==========================================

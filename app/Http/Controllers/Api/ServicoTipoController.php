@@ -38,6 +38,9 @@ class ServicoTipoController extends Controller
 
     public function options()
     {
+        // 🔥 FORÇA LIMPAR CACHE TEMPORARIAMENTE PARA TESTE
+        // Cache::forget('servico_tipos_options'); // DESCOMENTE PARA TESTAR
+
         $options = Cache::remember('servico_tipos_options', 3600, function () {
             return ServicoTipo::where('ativo', true)
                 ->orderBy('ordem')
@@ -45,7 +48,8 @@ class ServicoTipoController extends Controller
                 ->map(function ($tipo) {
                     return [
                         'label' => $tipo->nome,
-                        'value' => $tipo->slug,
+                        'value' => $tipo->id,        // ✅ ID NUMÉRICO (1,2,3...)
+                        'slug' => $tipo->slug,       // ✅ STRING (eletricista...)
                         'icone' => $tipo->icone,
                         'cor' => $tipo->cor
                     ];

@@ -108,7 +108,6 @@ class PedidoController extends Controller
                 ], 401);
             }
 
-            // PEGAR TODOS OS DADOS DO FormData
             $categoria_id = $request->post('categoria_id');
             $descricao = $request->post('descricao');
             $endereco = $request->post('endereco');
@@ -117,7 +116,6 @@ class PedidoController extends Controller
             Log::info('📌 descricao: ' . $descricao);
             Log::info('📌 endereco: ' . $endereco);
 
-            // VALIDAÇÃO
             if (!$categoria_id) {
                 return response()->json([
                     'success' => false,
@@ -139,13 +137,11 @@ class PedidoController extends Controller
                 ], 422);
             }
 
-            // FOTO
             $fotoPath = null;
             if ($request->hasFile('foto')) {
                 $fotoPath = $request->file('foto')->store('pedidos', 'public');
             }
 
-            // CRIAR PEDIDO
             $pedido = Pedido::create([
                 'cliente_id' => $cliente->id,
                 'categoria_id' => $categoria_id,
@@ -159,11 +155,11 @@ class PedidoController extends Controller
                 'valor' => null,
             ]);
 
-            // ✅ NOTIFICAÇÃO 1: Nova solicitação para PRESTADORES da categoria
             $prestadores = User::where('tipo', 'prestador')
                 ->whereHas('categorias', function ($query) use ($categoria_id) {
                     $query->where('categoria_id', $categoria_id);
                 })
+                ->limit(50) // ✅ LIMITAR PARA 50 PRESTADORES
                 ->get();
 
             foreach ($prestadores as $prestador) {
@@ -173,7 +169,7 @@ class PedidoController extends Controller
                     'categoria_nome' => $pedido->categoria->nome ?? 'Serviço',
                     'pedido_id' => $pedido->id,
                 ]));
-                Log::info("Notificação 'nova_solicitacao' enviada para o prestador ID: {$prestador->id}");
+                Log::info("Notificação enviada para prestador ID: {$prestador->id}");
             }
 
             return response()->json([
@@ -191,22 +187,35 @@ class PedidoController extends Controller
     }
 
     /**
-     * Cliente listar seus pedidos
-     * GET /api/cliente/pedidos
+     * Cliente listar seus pedidos - OTIMIZADO
+     * GET /api/cliente/pedidos/meus-pedidos
      */
     public function meusPedidos(Request $request)
     {
         Log::info('🔵 PedidoController@meusPedidos - INICIADO');
 
         $cliente = $request->user();
-        Log::info('Cliente ID: ' . ($cliente ? $cliente->id : 'null'));
 
-        $pedidos = Pedido::where('cliente_id', $cliente->id)
-            ->with(['categoria', 'prestador' => function ($q) {
-                $q->select('id', 'nome', 'foto', 'telefone', 'media_avaliacao');
-            }])
-            ->orderBy('created_at', 'desc')
-            ->get();
+        if (!$cliente) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Usuário não autenticado'
+            ], 401);
+        }
+
+        $cacheKey = "meus_pedidos_{$cliente->id}";
+
+        $pedidos = Cache::remember($cacheKey, 300, function () use ($cliente) {
+            return Pedido::where('cliente_id', $cliente->id)
+                ->select('id', 'status', 'descricao', 'foto', 'data', 'endereco', 'categoria_id', 'prestador_id', 'created_at')
+                ->with([
+                    'categoria:id,nome,icone,cor',
+                    'prestador:id,nome,foto,telefone,media_avaliacao'
+                ])
+                ->orderBy('created_at', 'desc')
+                ->limit(50) // ✅ LIMITAR PARA 50 PEDIDOS
+                ->get();
+        });
 
         Log::info('✅ Pedidos encontrados: ' . $pedidos->count());
 
@@ -252,7 +261,6 @@ class PedidoController extends Controller
             $pedido->status = $request->status;
             $pedido->save();
 
-            // ✅ NOTIFICAÇÕES baseadas no novo status
             $cliente = $pedido->cliente;
 
             switch ($request->status) {
@@ -263,7 +271,6 @@ class PedidoController extends Controller
                             'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
                             'pedido_id' => $pedido->id,
                         ]));
-                        Log::info("Notificação 'pedido_em_andamento' enviada para o cliente ID: {$cliente->id}");
                     }
                     break;
 
@@ -274,7 +281,6 @@ class PedidoController extends Controller
                             'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
                             'pedido_id' => $pedido->id,
                         ]));
-                        Log::info("Notificação 'pedido_concluido' enviada para o cliente ID: {$cliente->id}");
                     }
                     break;
 
@@ -284,7 +290,6 @@ class PedidoController extends Controller
                             'pedido_numero' => $pedido->numero ?? $pedido->id,
                             'pedido_id' => $pedido->id,
                         ]));
-                        Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
                     }
                     break;
 
@@ -295,7 +300,6 @@ class PedidoController extends Controller
                             'prestador_nome' => $pedido->prestador->nome ?? 'Prestador',
                             'pedido_id' => $pedido->id,
                         ]));
-                        Log::info("Notificação 'pedido_confirmado' enviada para o cliente ID: {$cliente->id}");
                     }
                     break;
             }
@@ -348,14 +352,12 @@ class PedidoController extends Controller
             $pedido->status = 'cancelado';
             $pedido->save();
 
-            // ✅ NOTIFICAÇÃO: Pedido cancelado para o CLIENTE
             $cliente = $pedido->cliente;
             if ($cliente) {
                 $cliente->notify(new DynamicNotification('pedido_cancelado', [
                     'pedido_numero' => $pedido->numero ?? $pedido->id,
                     'pedido_id' => $pedido->id,
                 ]));
-                Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
             }
 
             $this->clearPedidoCache($id, $pedido->cliente_id, $pedido->prestador_id);
@@ -446,6 +448,7 @@ class PedidoController extends Controller
         }
 
         if ($clienteId) {
+            Cache::forget("meus_pedidos_{$clienteId}");
             $statuses = ['pendente', 'aceito', 'concluido', 'cancelado', null];
             foreach ($statuses as $status) {
                 for ($page = 1; $page <= 5; $page++) {
