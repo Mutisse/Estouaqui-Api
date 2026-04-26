@@ -467,5 +467,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/performance/status-codes', [SystemMonitorController::class, 'statusCodesAnalysis']);
         Route::get('/business/advanced', [SystemMonitorController::class, 'advancedBusinessMetrics']);
         Route::get('/executive-report', [SystemMonitorController::class, 'executiveReport']);
+        // ADICIONAR ESTA ROTA FALTANTE
+    Route::get('/infrastructure-metrics', [SystemMonitorController::class, 'infrastructureMetrics']);
     });
 });
