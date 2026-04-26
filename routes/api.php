@@ -142,17 +142,18 @@ Route::middleware('auth:sanctum')->group(function () {
     // ==========================================
     // 12. NOTIFICAÇÕES
     // ==========================================
+    // ==========================================
+    // 12. NOTIFICAÇÕES - CORRIGIDO
+    // ==========================================
     Route::prefix('notifications')->group(function () {
-        // Notificações otimizadas
-        Route::get('/notifications', [UsuarioController::class, 'notifications']);
-        Route::get('/notifications/recent', [UsuarioController::class, 'recentNotifications']);
-        Route::get('/notifications/unread-count', [UsuarioController::class, 'unreadCount']);
-        Route::put('/notifications/{id}/read', [UsuarioController::class, 'markNotificationRead']);
-        Route::put('/notifications/read-all', [UsuarioController::class, 'markAllNotificationsRead']);
-        // Admin: Criar índices (executar uma vez)
-        Route::post('/notifications/create-indexes', [UsuarioController::class, 'createIndexes']);
+        // ✅ CORRETO: sem duplicar o prefixo
+        Route::get('/', [UsuarioController::class, 'notifications']);
+        Route::get('/recent', [UsuarioController::class, 'recentNotifications']);
+        Route::get('/unread-count', [UsuarioController::class, 'unreadCount']);
+        Route::put('/{id}/read', [UsuarioController::class, 'markNotificationRead']);
+        Route::put('/read-all', [UsuarioController::class, 'markAllNotificationsRead']);
+        Route::post('/create-indexes', [UsuarioController::class, 'createIndexes']);
     });
-
     // ==========================================
     // 13. PREFERÊNCIAS
     // ==========================================

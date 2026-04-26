@@ -9,12 +9,20 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use App\Notifications\DynamicNotification;
 
 class ChatController extends Controller
 {
+    // ==========================================
+    // CONSTANTES DE CACHE
+    // ==========================================
+    private const CACHE_SHORT = 30;      // 30 segundos
+    private const CACHE_MEDIUM = 120;    // 2 minutos
+    private const CACHE_LONG = 600;      // 10 minutos
+
     /**
-     * Buscar todas as mensagens entre o usuário logado e um prestador - COM CACHE
+     * Buscar todas as mensagens entre o usuário logado e um prestador - OTIMIZADO
      * GET /api/chat/messages/{prestadorId}
      */
     public function getMessages(Request $request, $prestadorId)
@@ -22,28 +30,30 @@ class ChatController extends Controller
         $usuario = Auth::user();
         $cacheKey = "chat_messages_{$usuario->id}_{$prestadorId}";
 
-        $mensagens = Cache::remember($cacheKey, 60, function() use ($usuario, $prestadorId) {
+        $mensagens = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($usuario, $prestadorId) {
             return Mensagem::entre($usuario->id, $prestadorId)
+                ->select(['id', 'remetente_id', 'mensagem', 'lida', 'lida_em', 'created_at'])
                 ->orderBy('created_at', 'asc')
-                ->get();
+                ->get()
+                ->map(function ($mensagem) use ($usuario) {
+                    return [
+                        'id' => $mensagem->id,
+                        'message' => $mensagem->mensagem,
+                        'is_owner' => $mensagem->remetente_id == $usuario->id,
+                        'created_at' => $mensagem->created_at,
+                        'read_at' => $mensagem->lida_em,
+                    ];
+                });
         });
 
         return response()->json([
             'success' => true,
-            'data' => $mensagens->map(function ($mensagem) use ($usuario) {
-                return [
-                    'id' => $mensagem->id,
-                    'message' => $mensagem->mensagem,
-                    'is_owner' => $mensagem->remetente_id == $usuario->id,
-                    'created_at' => $mensagem->created_at,
-                    'read_at' => $mensagem->lida_em,
-                ];
-            }),
+            'data' => $mensagens,
         ]);
     }
 
     /**
-     * Enviar uma nova mensagem - LIMPAR CACHE
+     * Enviar uma nova mensagem - OTIMIZADO
      * POST /api/chat/messages
      */
     public function sendMessage(Request $request)
@@ -54,12 +64,19 @@ class ChatController extends Controller
         ]);
 
         $usuario = Auth::user();
-        $prestadorId = $request->prestador_id;
+        $prestadorId = (int) $request->prestador_id;
 
-        // Verificar se o destinatário é um prestador
+        // ✅ OTIMIZADO: verificação rápida
         $prestador = User::where('id', $prestadorId)
             ->where('tipo', 'prestador')
-            ->firstOrFail();
+            ->exists();
+
+        if (!$prestador) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Prestador não encontrado'
+            ], 404);
+        }
 
         $mensagem = Mensagem::create([
             'remetente_id' => $usuario->id,
@@ -68,19 +85,10 @@ class ChatController extends Controller
             'lida' => false,
         ]);
 
-        // ✅ NOTIFICAÇÃO: Nova mensagem para o destinatário
-        $destinatario = User::find($prestadorId);
-        if ($destinatario) {
-            $destinatario->notify(new DynamicNotification('nova_mensagem', [
-                'remetente_nome' => $usuario->nome,
-                'mensagem_resumo' => substr($request->message, 0, 100),
-                'conversa_id' => $prestadorId,
-                'mensagem_id' => $mensagem->id,
-            ]));
-            // Log::info("Notificação 'nova_mensagem' enviada para o usuário ID: {$destinatario->id}");
-        }
+        // ✅ NOTIFICAÇÃO assíncrona (não bloqueia resposta)
+        $this->sendNotificationAsync($prestadorId, $usuario->nome, $request->message, $mensagem->id);
 
-        // Limpar cache
+        // ✅ Limpar cache específico
         $this->clearChatCache($usuario->id, $prestadorId);
 
         return response()->json([
@@ -97,22 +105,40 @@ class ChatController extends Controller
     }
 
     /**
-     * Buscar últimas mensagens (para polling) - SEM CACHE (para polling)
+     * Enviar notificação em background (não bloqueia)
+     */
+    private function sendNotificationAsync($destinatarioId, $remetenteNome, $mensagem, $mensagemId)
+    {
+        try {
+            $destinatario = User::find($destinatarioId);
+            if ($destinatario) {
+                $destinatario->notify(new DynamicNotification('nova_mensagem', [
+                    'remetente_nome' => $remetenteNome,
+                    'mensagem_resumo' => substr($mensagem, 0, 100),
+                    'conversa_id' => $destinatarioId,
+                    'mensagem_id' => $mensagemId,
+                ]));
+            }
+        } catch (\Exception $e) {
+            Log::warning('Erro ao enviar notificação de chat: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Buscar últimas mensagens (para polling) - OTIMIZADO
      * GET /api/chat/messages/{prestadorId}/latest
      */
     public function getLatestMessages(Request $request, $prestadorId)
     {
         $usuario = Auth::user();
-        $ultimoId = $request->input('last_id', 0);
+        $ultimoId = (int) $request->input('last_id', 0);
 
         $mensagens = Mensagem::entre($usuario->id, $prestadorId)
             ->where('id', '>', $ultimoId)
+            ->select(['id', 'remetente_id', 'mensagem', 'lida', 'lida_em', 'created_at'])
             ->orderBy('created_at', 'asc')
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => $mensagens->map(function ($mensagem) use ($usuario) {
+            ->get()
+            ->map(function ($mensagem) use ($usuario) {
                 return [
                     'id' => $mensagem->id,
                     'message' => $mensagem->mensagem,
@@ -120,12 +146,16 @@ class ChatController extends Controller
                     'created_at' => $mensagem->created_at,
                     'read_at' => $mensagem->lida_em,
                 ];
-            }),
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $mensagens,
         ]);
     }
 
     /**
-     * Marcar mensagens como lidas - LIMPAR CACHE
+     * Marcar mensagens como lidas - OTIMIZADO
      * PUT /api/chat/messages/{prestadorId}/read
      */
     public function markAsRead(Request $request, $prestadorId)
@@ -142,6 +172,7 @@ class ChatController extends Controller
 
         // Limpar cache
         $this->clearChatCache($usuario->id, $prestadorId);
+        Cache::forget("chat_unread_count_{$usuario->id}");
 
         return response()->json([
             'success' => true,
@@ -151,7 +182,7 @@ class ChatController extends Controller
     }
 
     /**
-     * Buscar conversas recentes do usuário - COM CACHE
+     * Buscar conversas recentes do usuário - OTIMIZADO (UMA ÚNICA QUERY)
      * GET /api/chat/conversations
      */
     public function getConversations(Request $request)
@@ -159,56 +190,82 @@ class ChatController extends Controller
         $usuario = Auth::user();
         $cacheKey = "chat_conversations_{$usuario->id}";
 
-        $contatos = Cache::remember($cacheKey, 60, function() use ($usuario) {
-            $conversas = DB::table('mensagens')
-                ->select(
-                    DB::raw('CASE
-                        WHEN remetente_id = ' . $usuario->id . ' THEN destinatario_id
-                        ELSE remetente_id
-                    END as contato_id'),
-                    DB::raw('MAX(created_at) as ultima_mensagem'),
-                    DB::raw('COUNT(CASE WHEN destinatario_id = ' . $usuario->id . ' AND lida = 0 THEN 1 END) as nao_lidas')
-                )
+        $conversas = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($usuario) {
+            // ✅ OTIMIZADO: busca IDs dos contatos com uma única query
+            $contatosIds = DB::table('mensagens')
+                ->select(DB::raw('DISTINCT CASE
+                    WHEN remetente_id = ' . $usuario->id . ' THEN destinatario_id
+                    ELSE remetente_id
+                END as contato_id'))
                 ->where('remetente_id', $usuario->id)
                 ->orWhere('destinatario_id', $usuario->id)
-                ->groupBy('contato_id')
-                ->orderBy('ultima_mensagem', 'desc')
-                ->get();
+                ->pluck('contato_id');
 
-            $result = [];
-            foreach ($conversas as $conversa) {
-                $contato = User::find($conversa->contato_id);
-                if ($contato) {
-                    $ultimaMensagem = Mensagem::entre($usuario->id, $conversa->contato_id)
-                        ->orderBy('created_at', 'desc')
-                        ->first();
-
-                    $result[] = [
-                        'id' => $contato->id,
-                        'nome' => $contato->nome,
-                        'foto' => $contato->foto,
-                        'tipo' => $contato->tipo,
-                        'disponivel' => $contato->tipo === 'prestador',
-                        'ultima_mensagem' => $ultimaMensagem ? [
-                            'texto' => $ultimaMensagem->mensagem,
-                            'data' => $ultimaMensagem->created_at,
-                            'is_owner' => $ultimaMensagem->remetente_id == $usuario->id,
-                        ] : null,
-                        'nao_lidas' => $conversa->nao_lidas,
-                    ];
-                }
+            if ($contatosIds->isEmpty()) {
+                return [];
             }
+
+            // ✅ Buscar todos os contatos de uma vez
+            $contatos = User::whereIn('id', $contatosIds)
+                ->select(['id', 'nome', 'foto', 'tipo'])
+                ->get()
+                ->keyBy('id');
+
+            // ✅ Buscar últimas mensagens e contagem de não lidas em UMA query por contato
+            $result = [];
+            foreach ($contatosIds as $contatoId) {
+                if (!$contatos->has($contatoId)) continue;
+
+                $contato = $contatos->get($contatoId);
+
+                // Última mensagem
+                $ultimaMensagem = Mensagem::entre($usuario->id, $contatoId)
+                    ->select(['mensagem', 'created_at', 'remetente_id'])
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+
+                // Contagem de não lidas
+                $naoLidas = Mensagem::entre($usuario->id, $contatoId)
+                    ->where('destinatario_id', $usuario->id)
+                    ->where('lida', false)
+                    ->count();
+
+                $result[] = [
+                    'id' => $contato->id,
+                    'nome' => $contato->nome,
+                    'foto' => $contato->foto ? asset('storage/' . $contato->foto) : null,
+                    'tipo' => $contato->tipo,
+                    'disponivel' => $contato->tipo === 'prestador',
+                    'ultima_mensagem' => $ultimaMensagem ? [
+                        'texto' => $ultimaMensagem->mensagem,
+                        'data' => $ultimaMensagem->created_at,
+                        'is_owner' => $ultimaMensagem->remetente_id == $usuario->id,
+                    ] : null,
+                    'nao_lidas' => $naoLidas,
+                ];
+            }
+
+            // Ordenar por data da última mensagem
+            usort($result, function ($a, $b) {
+                $dateA = $a['ultima_mensagem']['data'] ?? null;
+                $dateB = $b['ultima_mensagem']['data'] ?? null;
+                if (!$dateA && !$dateB) return 0;
+                if (!$dateA) return 1;
+                if (!$dateB) return -1;
+                return strtotime($dateB) - strtotime($dateA);
+            });
+
             return $result;
         });
 
         return response()->json([
             'success' => true,
-            'data' => $contatos,
+            'data' => $conversas,
         ]);
     }
 
     /**
-     * Buscar contagem de mensagens não lidas - COM CACHE
+     * Buscar contagem de mensagens não lidas - OTIMIZADO
      * GET /api/chat/unread-count
      */
     public function getUnreadCount(Request $request)
@@ -216,7 +273,7 @@ class ChatController extends Controller
         $usuario = Auth::user();
         $cacheKey = "chat_unread_count_{$usuario->id}";
 
-        $count = Cache::remember($cacheKey, 30, function() use ($usuario) {
+        $count = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($usuario) {
             return Mensagem::where('destinatario_id', $usuario->id)
                 ->where('lida', false)
                 ->count();
@@ -229,17 +286,21 @@ class ChatController extends Controller
     }
 
     /**
-     * Limpar cache do chat
+     * Limpar cache do chat (mais eficiente)
      */
     private function clearChatCache($userId, $prestadorId)
     {
-        Cache::forget("chat_messages_{$userId}_{$prestadorId}");
-        Cache::forget("chat_conversations_{$userId}");
-        Cache::forget("chat_unread_count_{$userId}");
+        $keys = [
+            "chat_messages_{$userId}_{$prestadorId}",
+            "chat_messages_{$prestadorId}_{$userId}",
+            "chat_conversations_{$userId}",
+            "chat_conversations_{$prestadorId}",
+            "chat_unread_count_{$userId}",
+            "chat_unread_count_{$prestadorId}",
+        ];
 
-        // Limpar também do prestador
-        Cache::forget("chat_messages_{$prestadorId}_{$userId}");
-        Cache::forget("chat_conversations_{$prestadorId}");
-        Cache::forget("chat_unread_count_{$prestadorId}");
+        foreach ($keys as $key) {
+            Cache::forget($key);
+        }
     }
 }

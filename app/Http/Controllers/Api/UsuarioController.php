@@ -256,65 +256,89 @@ class UsuarioController extends Controller
      * Dashboard do usuário - COM CACHE OTIMIZADO (QUERY MAIS RÁPIDAS)
      * GET /api/dashboard
      */
+    /**
+     * Dashboard do usuário - COM CACHE OTIMIZADO (QUERY MAIS RÁPIDAS)
+     * GET /api/dashboard
+     */
     public function dashboard(Request $request)
     {
-        $user = $request->user();
-        $cacheKey = "dashboard_{$user->id}";
+        try {
+            $user = $request->user();
+            $cacheKey = "dashboard_{$user->id}";
 
-        $data = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user) {
-            $result = [
-                'user' => [
-                    'id' => $user->id,
-                    'nome' => $user->nome,
-                    'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
-                    'tipo' => $user->tipo,
-                ],
-                'stats' => [
-                    'membro_desde' => $user->created_at->format('d/m/Y'),
-                    'anos' => now()->diffInYears($user->created_at),
-                ]
-            ];
+            $data = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user) {
+                $result = [
+                    'user' => [
+                        'id' => $user->id,
+                        'nome' => $user->nome,
+                        'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                        'tipo' => $user->tipo,
+                    ],
+                    'stats' => [
+                        'membro_desde' => $user->created_at->format('d/m/Y'),
+                        'anos' => now()->diffInYears($user->created_at),
+                    ]
+                ];
 
-            if ($user->isCliente()) {
-                // ✅ OTIMIZADO: Uso de aggregate queries ao invés de múltiplas queries
-                $stats = DB::table('pedidos')
-                    ->where('cliente_id', $user->id)
-                    ->selectRaw("
-                        COUNT(CASE WHEN status IN ('pendente', 'aceito', 'em_andamento') THEN 1 END) as pedidos_ativos,
-                        COUNT(CASE WHEN status = 'concluido' THEN 1 END) as pedidos_concluidos
-                    ")
-                    ->first();
+                if ($user->isCliente()) {
+                    try {
+                        $stats = DB::table('pedidos')
+                            ->where('cliente_id', $user->id)
+                            ->selectRaw("
+                            COUNT(CASE WHEN status IN ('pendente', 'aceito', 'em_andamento') THEN 1 END) as pedidos_ativos,
+                            COUNT(CASE WHEN status = 'concluido' THEN 1 END) as pedidos_concluidos
+                        ")
+                            ->first();
 
-                $result['stats']['pedidos_ativos'] = (int) ($stats->pedidos_ativos ?? 0);
-                $result['stats']['pedidos_concluidos'] = (int) ($stats->pedidos_concluidos ?? 0);
-                $result['stats']['favoritos'] = DB::table('favoritos')->where('user_id', $user->id)->count();
-                $result['stats']['avaliacoes'] = DB::table('avaliacoes')->where('cliente_id', $user->id)->count();
-            } elseif ($user->isPrestador()) {
-                $stats = DB::table('pedidos')
-                    ->where('prestador_id', $user->id)
-                    ->selectRaw("
-                        COUNT(CASE WHEN status IN ('pendente', 'aceito', 'em_andamento') THEN 1 END) as servicos_ativos,
-                        COUNT(CASE WHEN status = 'concluido' THEN 1 END) as servicos_concluidos,
-                        COUNT(CASE WHEN status = 'concluido' THEN 1 END) as avaliacoes
-                    ")
-                    ->first();
+                        $result['stats']['pedidos_ativos'] = (int) ($stats->pedidos_ativos ?? 0);
+                        $result['stats']['pedidos_concluidos'] = (int) ($stats->pedidos_concluidos ?? 0);
 
-                $result['stats']['servicos_ativos'] = (int) ($stats->servicos_ativos ?? 0);
-                $result['stats']['servicos_concluidos'] = (int) ($stats->servicos_concluidos ?? 0);
-                $result['stats']['avaliacoes'] = (int) ($stats->avaliacoes ?? 0);
-                $result['stats']['rating'] = (float) ($user->media_avaliacao ?? 0);
-            } elseif ($user->isAdmin()) {
-                // ✅ OTIMIZADO: Cache separado para stats de admin
-                $result['stats'] = $this->getAdminStats();
-            }
+                        // ✅ CORRIGIDO: usar 'cliente_id' em vez de 'user_id'
+                        $result['stats']['favoritos'] = DB::table('favoritos')->where('cliente_id', $user->id)->count();
+                        $result['stats']['avaliacoes'] = DB::table('avaliacoes')->where('cliente_id', $user->id)->count();
+                    } catch (\Exception $e) {
+                        $result['stats']['pedidos_ativos'] = 0;
+                        $result['stats']['pedidos_concluidos'] = 0;
+                        $result['stats']['favoritos'] = 0;
+                        $result['stats']['avaliacoes'] = 0;
+                    }
+                } elseif ($user->isPrestador()) {
+                    try {
+                        $stats = DB::table('pedidos')
+                            ->where('prestador_id', $user->id)
+                            ->selectRaw("
+                            COUNT(CASE WHEN status IN ('pendente', 'aceito', 'em_andamento') THEN 1 END) as servicos_ativos,
+                            COUNT(CASE WHEN status = 'concluido' THEN 1 END) as servicos_concluidos
+                        ")
+                            ->first();
 
-            return $result;
-        });
+                        $result['stats']['servicos_ativos'] = (int) ($stats->servicos_ativos ?? 0);
+                        $result['stats']['servicos_concluidos'] = (int) ($stats->servicos_concluidos ?? 0);
+                        $result['stats']['avaliacoes'] = DB::table('avaliacoes')->where('prestador_id', $user->id)->count();
+                        $result['stats']['rating'] = (float) ($user->media_avaliacao ?? 0);
+                    } catch (\Exception $e) {
+                        $result['stats']['servicos_ativos'] = 0;
+                        $result['stats']['servicos_concluidos'] = 0;
+                        $result['stats']['avaliacoes'] = 0;
+                        $result['stats']['rating'] = 0;
+                    }
+                } elseif ($user->isAdmin()) {
+                    $result['stats'] = $this->getAdminStats();
+                }
 
-        return response()->json([
-            'success' => true,
-            'data' => $data
-        ]);
+                return $result;
+            });
+
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao carregar dashboard: ' . $e->getMessage()
+            ], 500);
+        }
     }
 
     /**
@@ -1095,9 +1119,9 @@ class UsuarioController extends Controller
 
             // ✅ OTIMIZADO: UNION queries ao invés de múltiplas queries
             $pedidosQuery = DB::table('pedidos')
-                ->where(function($query) use ($user) {
+                ->where(function ($query) use ($user) {
                     $query->where('cliente_id', $user->id)
-                          ->orWhere('prestador_id', $user->id);
+                        ->orWhere('prestador_id', $user->id);
                 })
                 ->select(
                     DB::raw("CONCAT('pedido_', id) as unique_id"),
@@ -1127,9 +1151,9 @@ class UsuarioController extends Controller
             }
 
             $avaliacoes = DB::table('avaliacoes')
-                ->where(function($query) use ($user) {
+                ->where(function ($query) use ($user) {
                     $query->where('cliente_id', $user->id)
-                          ->orWhere('prestador_id', $user->id);
+                        ->orWhere('prestador_id', $user->id);
                 })
                 ->select('id', 'nota', 'created_at as data', 'cliente_id')
                 ->limit($limit)

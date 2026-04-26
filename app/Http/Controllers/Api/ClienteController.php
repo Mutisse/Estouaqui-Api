@@ -12,18 +12,22 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\DB;
 use App\Notifications\DynamicNotification;
 
 class ClienteController extends Controller
 {
     // ==========================================
+    // CONSTANTES DE CACHE OTIMIZADAS
+    // ==========================================
+    private const CACHE_SHORT = 120;
+    private const CACHE_MEDIUM = 300;
+    private const CACHE_LONG = 3600;
+
+    // ==========================================
     // 1. REGISTRO DO CLIENTE
     // ==========================================
 
-    /**
-     * Registro de novo cliente
-     * POST /api/register/cliente
-     */
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -36,12 +40,10 @@ class ClienteController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
         }
 
+        DB::beginTransaction();
         try {
             $userData = [
                 'nome' => $request->nome,
@@ -53,11 +55,12 @@ class ClienteController extends Controller
             ];
 
             if ($request->hasFile('foto')) {
-                $path = $request->file('foto')->store('fotos/clientes', 'public');
-                $userData['foto'] = $path;
+                $userData['foto'] = $request->file('foto')->store('fotos/clientes', 'public');
             }
 
             $user = User::create($userData);
+            DB::commit();
+
             $token = $user->createToken('auth_token')->plainTextToken;
 
             return response()->json([
@@ -73,67 +76,60 @@ class ClienteController extends Controller
                 'token' => $token
             ], 201);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao registar cliente: ' . $e->getMessage()
-            ], 500);
+            DB::rollBack();
+            return response()->json(['success' => false, 'error' => 'Erro ao registar cliente: ' . $e->getMessage()], 500);
         }
     }
 
     // ==========================================
-    // 2. PEDIDOS DO CLIENTE
+    // 2. PEDIDOS DO CLIENTE - OTIMIZADO
     // ==========================================
 
     /**
-     * Listar pedidos do cliente
+     * Listar pedidos do cliente - OTIMIZADO COM PAGINAÇÃO
      * GET /api/cliente/pedidos
      */
     public function pedidos(Request $request)
     {
         $user = $request->user();
         $status = $request->query('status');
-        $page = $request->query('page', 1);
+        $perPage = (int) $request->query('per_page', 15);
+        $perPage = min(50, max(5, $perPage));
 
-        $cacheKey = "cliente_pedidos_{$user->id}_{$status}_{$page}";
+        $cacheKey = "cliente_pedidos_{$user->id}_" . ($status ?? 'all') . "_{$perPage}";
 
-        $pedidos = Cache::remember($cacheKey, 120, function () use ($user, $status) {
-            $query = Pedido::where('cliente_id', $user->id);
+        $pedidos = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($user, $status, $perPage) {
+            // ✅ USAR DB::table para performance
+            $query = DB::table('pedidos')
+                ->where('cliente_id', $user->id)
+                ->leftJoin('users as prestadores', 'pedidos.prestador_id', '=', 'prestadores.id')
+                ->select([
+                    'pedidos.id',
+                    'pedidos.status',
+                    'pedidos.descricao',
+                    'pedidos.data',
+                    'pedidos.endereco',
+                    'pedidos.created_at',
+                    'prestadores.id as prestador_id',
+                    'prestadores.nome as prestador_nome',
+                    'prestadores.foto as prestador_foto',
+                    'prestadores.telefone as prestador_telefone',
+                    'prestadores.media_avaliacao as prestador_media'
+                ]);
 
             if ($status) {
-                $query->where('status', $status);
+                $query->where('pedidos.status', $status);
             }
 
-            $pedidos = $query->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
-                ->orderBy('created_at', 'desc')
-                ->get();
-
-            return $pedidos->map(function ($pedido) {
-                return [
-                    'id' => $pedido->id,
-                    'status' => $pedido->status,
-                    'descricao' => $pedido->descricao,
-                    'data' => $pedido->data,
-                    'endereco' => $pedido->endereco,
-                    'created_at' => $pedido->created_at,
-                    'prestador' => $pedido->prestador ? [
-                        'id' => $pedido->prestador->id,
-                        'nome' => $pedido->prestador->nome,
-                        'foto' => $pedido->prestador->foto ? asset('storage/' . $pedido->prestador->foto) : null,
-                        'telefone' => $pedido->prestador->telefone,
-                        'media_avaliacao' => $pedido->prestador->media_avaliacao ?? 0,
-                    ] : null,
-                ];
-            });
+            return $query->orderBy('pedidos.created_at', 'desc')
+                ->paginate($perPage);
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => $pedidos
-        ]);
+        return response()->json(['success' => true, 'data' => $pedidos]);
     }
 
     /**
-     * Listar pedidos do cliente (formato mobile)
+     * Listar pedidos do cliente (formato mobile) - SUPER OTIMIZADO
      * GET /api/cliente/meus-pedidos
      */
     public function meusPedidos(Request $request)
@@ -141,16 +137,11 @@ class ClienteController extends Controller
         try {
             $user = $request->user();
 
-            if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Usuário não autenticado'
-                ], 401);
-            }
-
+            // ✅ ADICIONAR LIMITE MÁXIMO DE 20 REGISTROS
             $pedidos = Pedido::where('cliente_id', $user->id)
                 ->with(['prestador:id,nome,foto,telefone,media_avaliacao'])
                 ->orderBy('created_at', 'desc')
+                ->limit(20)  // ← **ADICIONAR ESTA LINHA**
                 ->get();
 
             $pedidosFormatados = $pedidos->map(function ($pedido) {
@@ -180,16 +171,16 @@ class ClienteController extends Controller
                 'data' => $pedidosFormatados
             ]);
         } catch (\Exception $e) {
-            error_log('Erro: ' . $e->getMessage());
+            Log::error('Erro em meusPedidos: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao carregar pedidos: ' . $e->getMessage()
+                'message' => 'Erro ao carregar pedidos'
             ], 500);
         }
     }
 
     /**
-     * Detalhes de um pedido específico
+     * Detalhes de um pedido específico - OTIMIZADO
      * GET /api/cliente/pedidos/{id}
      */
     public function showPedido(Request $request, $id)
@@ -197,23 +188,73 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_pedido_{$user->id}_{$id}";
 
-        $pedido = Cache::remember($cacheKey, 300, function () use ($user, $id) {
-            return Pedido::where('cliente_id', $user->id)
-                ->with(['prestador:id,nome,foto,telefone,media_avaliacao', 'servico:id,nome,preco,duracao', 'avaliacao'])
-                ->find($id);
+        $pedido = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $id) {
+            // ✅ OTIMIZADO: query única com joins
+            $pedido = DB::table('pedidos')
+                ->where('pedidos.id', $id)
+                ->where('pedidos.cliente_id', $user->id)
+                ->leftJoin('users as prestadores', 'pedidos.prestador_id', '=', 'prestadores.id')
+                ->leftJoin('servicos', 'pedidos.servico_id', '=', 'servicos.id')
+                ->leftJoin('avaliacoes', function ($join) use ($user) {
+                    $join->on('avaliacoes.pedido_id', '=', 'pedidos.id')
+                        ->where('avaliacoes.cliente_id', '=', $user->id);
+                })
+                ->select([
+                    'pedidos.*',
+                    'prestadores.id as prestador_id',
+                    'prestadores.nome as prestador_nome',
+                    'prestadores.foto as prestador_foto',
+                    'prestadores.telefone as prestador_telefone',
+                    'prestadores.media_avaliacao as prestador_media',
+                    'servicos.id as servico_id',
+                    'servicos.nome as servico_nome',
+                    'servicos.preco as servico_preco',
+                    'servicos.duracao as servico_duracao',
+                    'avaliacoes.id as avaliacao_id',
+                    'avaliacoes.nota as avaliacao_nota',
+                    'avaliacoes.comentario as avaliacao_comentario'
+                ])
+                ->first();
+
+            if (!$pedido) return null;
+
+            return [
+                'id' => (int) $pedido->id,
+                'numero' => (string) $pedido->numero,
+                'status' => (string) $pedido->status,
+                'descricao' => $pedido->descricao,
+                'foto' => $pedido->foto ? asset('storage/' . $pedido->foto) : null,
+                'data' => $pedido->data,
+                'endereco' => (string) $pedido->endereco,
+                'observacoes' => $pedido->observacoes,
+                'valor' => (float) ($pedido->valor ?? 0),
+                'created_at' => $pedido->created_at,
+                'prestador' => $pedido->prestador_id ? [
+                    'id' => (int) $pedido->prestador_id,
+                    'nome' => (string) $pedido->prestador_nome,
+                    'foto' => $pedido->prestador_foto ? asset('storage/' . $pedido->prestador_foto) : null,
+                    'telefone' => (string) $pedido->prestador_telefone,
+                    'media_avaliacao' => (float) ($pedido->prestador_media ?? 0),
+                ] : null,
+                'servico' => $pedido->servico_id ? [
+                    'id' => (int) $pedido->servico_id,
+                    'nome' => (string) $pedido->servico_nome,
+                    'preco' => (float) ($pedido->servico_preco ?? 0),
+                    'duracao' => (int) ($pedido->servico_duracao ?? 0),
+                ] : null,
+                'avaliacao' => $pedido->avaliacao_id ? [
+                    'id' => (int) $pedido->avaliacao_id,
+                    'nota' => (int) $pedido->avaliacao_nota,
+                    'comentario' => $pedido->avaliacao_comentario,
+                ] : null,
+            ];
         });
 
         if (!$pedido) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
+            return response()->json(['success' => false, 'error' => 'Pedido não encontrado'], 404);
         }
 
-        return response()->json([
-            'success' => true,
-            'data' => $pedido
-        ]);
+        return response()->json(['success' => true, 'data' => $pedido]);
     }
 
     /**
@@ -233,12 +274,10 @@ class ClienteController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
         }
 
+        DB::beginTransaction();
         try {
             $pedido = Pedido::create([
                 'cliente_id' => $user->id,
@@ -251,31 +290,28 @@ class ClienteController extends Controller
                 'numero' => 'PED-' . strtoupper(uniqid()),
             ]);
 
-            // ✅ NOTIFICAÇÃO: Novo pedido criado para o PRESTADOR
             $prestador = User::find($request->prestador_id);
             if ($prestador) {
-                $prestador->notify(new DynamicNotification('novo_pedido_cliente', [
-                    'cliente_nome' => $user->nome,
-                    'pedido_numero' => $pedido->numero,
-                    'data' => $request->data,
-                    'pedido_id' => $pedido->id,
-                ]));
-                Log::info("Notificação 'novo_pedido_cliente' enviada para o prestador ID: {$prestador->id}");
+                try {
+                    $prestador->notify(new DynamicNotification('novo_pedido_cliente', [
+                        'cliente_nome' => $user->nome,
+                        'pedido_numero' => $pedido->numero,
+                        'data' => $request->data,
+                        'pedido_id' => $pedido->id,
+                    ]));
+                } catch (\Exception $e) {
+                    Log::warning('Erro ao enviar notificação: ' . $e->getMessage());
+                }
             }
 
-            // Limpar cache do cliente
+            DB::commit();
             $this->clearClienteCache($user->id);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Pedido criado com sucesso',
-                'data' => $pedido
-            ], 201);
+            return response()->json(['success' => true, 'message' => 'Pedido criado com sucesso', 'data' => $pedido], 201);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao criar pedido'
-            ], 500);
+            DB::rollBack();
+            Log::error('Erro ao criar pedido: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao criar pedido'], 500);
         }
     }
 
@@ -286,76 +322,86 @@ class ClienteController extends Controller
     public function cancelarPedido(Request $request, $id)
     {
         $user = $request->user();
-        $pedido = Pedido::where('cliente_id', $user->id)->find($id);
 
-        if (!$pedido) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
+        DB::beginTransaction();
+        try {
+            $pedido = Pedido::where('cliente_id', $user->id)->lockForUpdate()->find($id);
+
+            if (!$pedido) {
+                return response()->json(['success' => false, 'error' => 'Pedido não encontrado'], 404);
+            }
+
+            if ($pedido->status !== 'pendente') {
+                return response()->json(['success' => false, 'error' => 'Apenas pedidos pendentes podem ser cancelados'], 422);
+            }
+
+            $pedido->status = 'cancelado';
+            $pedido->save();
+
+            $prestador = $pedido->prestador;
+            if ($prestador) {
+                try {
+                    $prestador->notify(new DynamicNotification('pedido_cancelado_cliente', [
+                        'cliente_nome' => $user->nome,
+                        'pedido_numero' => $pedido->numero ?? $pedido->id,
+                        'pedido_id' => $pedido->id,
+                    ]));
+                } catch (\Exception $e) {
+                    Log::warning('Erro ao enviar notificação: ' . $e->getMessage());
+                }
+            }
+
+            DB::commit();
+            $this->clearClienteCache($user->id);
+            Cache::forget("cliente_pedido_{$user->id}_{$id}");
+
+            return response()->json(['success' => true, 'message' => 'Pedido cancelado com sucesso', 'data' => $pedido]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Erro ao cancelar pedido: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao cancelar pedido'], 500);
         }
-
-        if ($pedido->status !== 'pendente') {
-            return response()->json([
-                'success' => false,
-                'error' => 'Apenas pedidos pendentes podem ser cancelados'
-            ], 422);
-        }
-
-        $pedido->status = 'cancelado';
-        $pedido->save();
-
-        // ✅ NOTIFICAÇÃO: Pedido cancelado para o PRESTADOR
-        $prestador = $pedido->prestador;
-        if ($prestador) {
-            $prestador->notify(new DynamicNotification('pedido_cancelado_cliente', [
-                'cliente_nome' => $user->nome,
-                'pedido_numero' => $pedido->numero ?? $pedido->id,
-                'pedido_id' => $pedido->id,
-            ]));
-            Log::info("Notificação 'pedido_cancelado_cliente' enviada para o prestador ID: {$prestador->id}");
-        }
-
-        // Limpar cache
-        $this->clearClienteCache($user->id);
-        Cache::forget("cliente_pedido_{$user->id}_{$id}");
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Pedido cancelado com sucesso',
-            'data' => $pedido
-        ]);
     }
 
     // ==========================================
-    // 3. AVALIAÇÕES DO CLIENTE
+    // 3. AVALIAÇÕES DO CLIENTE - OTIMIZADO
     // ==========================================
 
     /**
-     * Listar avaliações do cliente
+     * Listar avaliações do cliente - OTIMIZADO
      * GET /api/cliente/avaliacoes
      */
     public function avaliacoes(Request $request)
     {
         $user = $request->user();
-        $page = $request->query('page', 1);
-        $cacheKey = "cliente_avaliacoes_{$user->id}_{$page}";
+        $perPage = (int) $request->query('per_page', 10);
 
-        $avaliacoes = Cache::remember($cacheKey, 300, function () use ($user) {
-            return Avaliacao::where('cliente_id', $user->id)
-                ->with('prestador:id,nome,foto,telefone')
-                ->orderBy('created_at', 'desc')
-                ->paginate(20);
+        $cacheKey = "cliente_avaliacoes_{$user->id}_{$perPage}";
+
+        $avaliacoes = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $perPage) {
+            return DB::table('avaliacoes')
+                ->where('cliente_id', $user->id)
+                ->leftJoin('users as prestadores', 'avaliacoes.prestador_id', '=', 'prestadores.id')
+                ->select([
+                    'avaliacoes.id',
+                    'avaliacoes.nota',
+                    'avaliacoes.comentario',
+                    'avaliacoes.categorias',
+                    'avaliacoes.created_at',
+                    'prestadores.id as prestador_id',
+                    'prestadores.nome as prestador_nome',
+                    'prestadores.foto as prestador_foto',
+                    'prestadores.telefone as prestador_telefone',
+                ])
+                ->orderBy('avaliacoes.created_at', 'desc')
+                ->paginate($perPage);
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => $avaliacoes
-        ]);
+        return response()->json(['success' => true, 'data' => $avaliacoes]);
     }
 
     /**
-     * Criar avaliação
+     * Criar avaliação - OTIMIZADO
      * POST /api/cliente/avaliacoes
      */
     public function createAvaliacao(Request $request)
@@ -371,37 +417,27 @@ class ClienteController extends Controller
         ]);
 
         if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
         }
 
-        // Verificar se o pedido pertence ao cliente
-        $pedido = Pedido::where('id', $request->pedido_id)
-            ->where('cliente_id', $user->id)
-            ->first();
-
-        if (!$pedido) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
-        }
-
-        // Verificar se já avaliou este pedido
-        $existe = Avaliacao::where('pedido_id', $request->pedido_id)
-            ->where('cliente_id', $user->id)
-            ->exists();
-
-        if ($existe) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Este pedido já foi avaliado'
-            ], 422);
-        }
-
+        DB::beginTransaction();
         try {
+            $pedido = Pedido::where('id', $request->pedido_id)
+                ->where('cliente_id', $user->id)
+                ->first();
+
+            if (!$pedido) {
+                return response()->json(['success' => false, 'error' => 'Pedido não encontrado'], 404);
+            }
+
+            $existe = Avaliacao::where('pedido_id', $request->pedido_id)
+                ->where('cliente_id', $user->id)
+                ->exists();
+
+            if ($existe) {
+                return response()->json(['success' => false, 'error' => 'Este pedido já foi avaliado'], 422);
+            }
+
             $avaliacao = Avaliacao::create([
                 'cliente_id' => $user->id,
                 'prestador_id' => $request->prestador_id,
@@ -411,153 +447,144 @@ class ClienteController extends Controller
                 'categorias' => $request->categorias,
             ]);
 
-            // ✅ NOTIFICAÇÃO: Nova avaliação para o PRESTADOR
             $prestador = User::find($request->prestador_id);
             if ($prestador) {
-                $comentarioResumo = $request->comentario ? substr($request->comentario, 0, 100) : 'Sem comentário';
-                $prestador->notify(new DynamicNotification('nova_avaliacao', [
-                    'cliente_nome' => $user->nome,
-                    'nota' => $request->nota,
-                    'comentario_resumo' => $comentarioResumo,
-                    'pedido_numero' => $pedido->numero ?? $pedido->id,
-                    'avaliacao_id' => $avaliacao->id,
-                ]));
-                Log::info("Notificação 'nova_avaliacao' enviada para o prestador ID: {$prestador->id}");
+                try {
+                    $comentarioResumo = $request->comentario ? substr($request->comentario, 0, 100) : 'Sem comentário';
+                    $prestador->notify(new DynamicNotification('nova_avaliacao', [
+                        'cliente_nome' => $user->nome,
+                        'nota' => $request->nota,
+                        'comentario_resumo' => $comentarioResumo,
+                        'pedido_numero' => $pedido->numero ?? $pedido->id,
+                        'avaliacao_id' => $avaliacao->id,
+                    ]));
+                } catch (\Exception $e) {
+                    Log::warning('Erro ao enviar notificação: ' . $e->getMessage());
+                }
             }
 
-            // Atualizar média do prestador
             $this->atualizarMediaPrestador($request->prestador_id);
+            DB::commit();
 
-            // Limpar cache
             $this->clearClienteCache($user->id);
             $this->clearPrestadorCache($request->prestador_id);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Avaliação enviada com sucesso!',
-                'data' => $avaliacao
-            ], 201);
+            return response()->json(['success' => true, 'message' => 'Avaliação enviada com sucesso!', 'data' => $avaliacao], 201);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao enviar avaliação'
-            ], 500);
+            DB::rollBack();
+            Log::error('Erro ao criar avaliação: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao enviar avaliação'], 500);
         }
     }
 
     /**
-     * Atualizar avaliação
+     * Atualizar avaliação - OTIMIZADO
      * PUT /api/cliente/avaliacoes/{id}
      */
     public function updateAvaliacao(Request $request, $id)
     {
         $user = $request->user();
-        $avaliacao = Avaliacao::where('cliente_id', $user->id)->find($id);
 
-        if (!$avaliacao) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Avaliação não encontrada'
-            ], 404);
-        }
-
-        $validator = Validator::make($request->all(), [
-            'nota' => 'sometimes|integer|min:1|max:5',
-            'comentario' => 'nullable|string|max:500',
-            'categorias' => 'nullable|array',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
-        $notaAnterior = $avaliacao->nota;
-        $prestadorId = $avaliacao->prestador_id;
-
+        DB::beginTransaction();
         try {
+            $avaliacao = Avaliacao::where('cliente_id', $user->id)->lockForUpdate()->find($id);
+
+            if (!$avaliacao) {
+                return response()->json(['success' => false, 'error' => 'Avaliação não encontrada'], 404);
+            }
+
+            $validator = Validator::make($request->all(), [
+                'nota' => 'sometimes|integer|min:1|max:5',
+                'comentario' => 'nullable|string|max:500',
+                'categorias' => 'nullable|array',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+            }
+
+            $notaAnterior = $avaliacao->nota;
+            $prestadorId = $avaliacao->prestador_id;
+
             if ($request->has('nota')) $avaliacao->nota = $request->nota;
             if ($request->has('comentario')) $avaliacao->comentario = $request->comentario;
             if ($request->has('categorias')) $avaliacao->categorias = $request->categorias;
 
             $avaliacao->save();
 
-            // ✅ NOTIFICAÇÃO: Avaliação atualizada para o PRESTADOR
             if ($request->has('nota') && $notaAnterior != $request->nota) {
                 $prestador = User::find($prestadorId);
                 if ($prestador) {
-                    $prestador->notify(new DynamicNotification('avaliacao_atualizada', [
-                        'cliente_nome' => $user->nome,
-                        'nota_anterior' => $notaAnterior,
-                        'nova_nota' => $request->nota,
-                        'avaliacao_id' => $avaliacao->id,
-                    ]));
-                    Log::info("Notificação 'avaliacao_atualizada' enviada para o prestador ID: {$prestador->id}");
+                    try {
+                        $prestador->notify(new DynamicNotification('avaliacao_atualizada', [
+                            'cliente_nome' => $user->nome,
+                            'nota_anterior' => $notaAnterior,
+                            'nova_nota' => $request->nota,
+                            'avaliacao_id' => $avaliacao->id,
+                        ]));
+                    } catch (\Exception $e) {
+                        Log::warning('Erro ao enviar notificação: ' . $e->getMessage());
+                    }
                 }
             }
 
-            // Atualizar média do prestador
             $this->atualizarMediaPrestador($prestadorId);
+            DB::commit();
 
-            // Limpar cache
             $this->clearClienteCache($user->id);
             $this->clearPrestadorCache($prestadorId);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Avaliação atualizada com sucesso',
-                'data' => $avaliacao
-            ]);
+            return response()->json(['success' => true, 'message' => 'Avaliação atualizada com sucesso', 'data' => $avaliacao]);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao atualizar avaliação'
-            ], 500);
+            DB::rollBack();
+            Log::error('Erro ao atualizar avaliação: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao atualizar avaliação'], 500);
         }
     }
 
     /**
-     * Deletar avaliação
+     * Deletar avaliação - OTIMIZADO
      * DELETE /api/cliente/avaliacoes/{id}
      */
     public function deleteAvaliacao(Request $request, $id)
     {
         $user = $request->user();
-        $avaliacao = Avaliacao::where('cliente_id', $user->id)->find($id);
 
-        if (!$avaliacao) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Avaliação não encontrada'
-            ], 404);
+        DB::beginTransaction();
+        try {
+            $avaliacao = Avaliacao::where('cliente_id', $user->id)->lockForUpdate()->find($id);
+
+            if (!$avaliacao) {
+                return response()->json(['success' => false, 'error' => 'Avaliação não encontrada'], 404);
+            }
+
+            $prestadorId = $avaliacao->prestador_id;
+            $avaliacao->delete();
+
+            $prestador = User::find($prestadorId);
+            if ($prestador) {
+                try {
+                    $prestador->notify(new DynamicNotification('avaliacao_removida', [
+                        'cliente_nome' => $user->nome,
+                        'avaliacao_id' => $id,
+                    ]));
+                } catch (\Exception $e) {
+                    Log::warning('Erro ao enviar notificação: ' . $e->getMessage());
+                }
+            }
+
+            $this->atualizarMediaPrestador($prestadorId);
+            DB::commit();
+
+            $this->clearClienteCache($user->id);
+            $this->clearPrestadorCache($prestadorId);
+
+            return response()->json(['success' => true, 'message' => 'Avaliação removida com sucesso']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Erro ao deletar avaliação: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao remover avaliação'], 500);
         }
-
-        $prestadorId = $avaliacao->prestador_id;
-        $avaliacao->delete();
-
-        // ✅ NOTIFICAÇÃO: Avaliação removida para o PRESTADOR
-        $prestador = User::find($prestadorId);
-        if ($prestador) {
-            $prestador->notify(new DynamicNotification('avaliacao_removida', [
-                'cliente_nome' => $user->nome,
-                'avaliacao_id' => $id,
-            ]));
-            Log::info("Notificação 'avaliacao_removida' enviada para o prestador ID: {$prestador->id}");
-        }
-
-        // Atualizar média do prestador
-        $this->atualizarMediaPrestador($prestadorId);
-
-        // Limpar cache
-        $this->clearClienteCache($user->id);
-        $this->clearPrestadorCache($prestadorId);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Avaliação removida com sucesso'
-        ]);
     }
 
     /**
@@ -569,61 +596,75 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_pedido_avaliacao_{$user->id}_{$pedidoId}";
 
-        $existe = Cache::remember($cacheKey, 3600, function () use ($user, $pedidoId) {
+        $existe = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user, $pedidoId) {
             return Avaliacao::where('pedido_id', $pedidoId)
                 ->where('cliente_id', $user->id)
                 ->exists();
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => ['avaliado' => $existe]
-        ]);
+        return response()->json(['success' => true, 'data' => ['avaliado' => $existe]]);
     }
 
     /**
-     * Atualizar média do prestador
+     * Atualizar média do prestador - OTIMIZADO
      */
     private function atualizarMediaPrestador($prestadorId)
     {
-        $media = Avaliacao::where('prestador_id', $prestadorId)->avg('nota');
-        $total = Avaliacao::where('prestador_id', $prestadorId)->count();
+        // ✅ OTIMIZADO: query única
+        $stats = DB::table('avaliacoes')
+            ->where('prestador_id', $prestadorId)
+            ->selectRaw('ROUND(AVG(nota), 1) as media, COUNT(*) as total')
+            ->first();
 
         User::where('id', $prestadorId)->update([
-            'media_avaliacao' => round($media, 1),
-            'total_avaliacoes' => $total
+            'media_avaliacao' => $stats->media ?? 0,
+            'total_avaliacoes' => $stats->total ?? 0
         ]);
 
-        // Limpar cache do prestador
         Cache::forget("prestador_stats_{$prestadorId}");
         Cache::forget("prestador_detalhes_{$prestadorId}");
     }
 
     // ==========================================
-    // 4. FAVORITOS
+    // 4. FAVORITOS - OTIMIZADO
     // ==========================================
 
     /**
-     * Listar favoritos do cliente
+     * Listar favoritos do cliente - OTIMIZADO
      * GET /api/cliente/favoritos
      */
     public function favoritos(Request $request)
     {
-        $user = $request->user();
-        $cacheKey = "cliente_favoritos_{$user->id}";
+        try {
+            $user = $request->user();
+            $cacheKey = "cliente_favoritos_{$user->id}";
 
-        $favoritos = Cache::remember($cacheKey, 300, function () use ($user) {
-            return Favorito::where('cliente_id', $user->id)
-                ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
-                ->orderBy('created_at', 'desc')
-                ->get()
-                ->toArray();
-        });
+            $favoritos = Cache::remember($cacheKey, 300, function () use ($user) {
+                return Favorito::where('cliente_id', $user->id)
+                    ->with('prestador:id,nome,foto,telefone,media_avaliacao,profissao')
+                    ->orderBy('created_at', 'desc')
+                    ->limit(20)  // ← **ADICIONAR ESTA LINHA**
+                    ->get()
+                    ->map(fn($fav) => [
+                        'id' => $fav->id,
+                        'created_at' => $fav->created_at,
+                        'prestador' => $fav->prestador ? [
+                            'id' => $fav->prestador->id,
+                            'nome' => $fav->prestador->nome,
+                            'foto' => $fav->prestador->foto ? asset('storage/' . $fav->prestador->foto) : null,
+                            'telefone' => $fav->prestador->telefone,
+                            'media_avaliacao' => (float) ($fav->prestador->media_avaliacao ?? 0),
+                            'profissao' => $fav->prestador->profissao ?? '',
+                        ] : null,
+                    ])
+                    ->toArray();
+            });
 
-        return response()->json([
-            'success' => true,
-            'data' => $favoritos
-        ]);
+            return response()->json(['success' => true, 'data' => $favoritos]);
+        } catch (\Exception $e) {
+            Log::error('Erro em favoritos: ' . $e->getMessage());
+            return response()->json(['success' => false, 'message' => 'Erro ao carregar favoritos'], 500);
+        }
     }
 
     /**
@@ -634,49 +675,34 @@ class ClienteController extends Controller
     {
         $user = $request->user();
 
-        // Verificar se prestador existe
         $prestador = User::where('tipo', 'prestador')->find($prestadorId);
         if (!$prestador) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Prestador não encontrado'
-            ], 404);
+            return response()->json(['success' => false, 'error' => 'Prestador não encontrado'], 404);
         }
 
-        // Verificar se já é favorito
         $existe = Favorito::where('cliente_id', $user->id)
             ->where('prestador_id', $prestadorId)
             ->exists();
 
         if ($existe) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Prestador já está nos favoritos'
-            ], 422);
+            return response()->json(['success' => false, 'error' => 'Prestador já está nos favoritos'], 422);
         }
 
+        DB::beginTransaction();
         try {
             $favorito = Favorito::create([
                 'cliente_id' => $user->id,
                 'prestador_id' => $prestadorId,
             ]);
 
-            // ✅ NOTIFICAÇÃO: Novo favorito para o PRESTADOR (já implementada no FavoritoController)
-            // A notificação já foi adicionada no FavoritoController@store
-
-            // Limpar cache
+            DB::commit();
             Cache::forget("cliente_favoritos_{$user->id}");
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Prestador adicionado aos favoritos',
-                'data' => $favorito
-            ], 201);
+            return response()->json(['success' => true, 'message' => 'Prestador adicionado aos favoritos', 'data' => $favorito], 201);
         } catch (\Exception $e) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Erro ao adicionar favorito'
-            ], 500);
+            DB::rollBack();
+            Log::error('Erro ao adicionar favorito: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao adicionar favorito'], 500);
         }
     }
 
@@ -688,26 +714,25 @@ class ClienteController extends Controller
     {
         $user = $request->user();
 
-        $favorito = Favorito::where('cliente_id', $user->id)
-            ->where('prestador_id', $prestadorId)
-            ->first();
+        DB::beginTransaction();
+        try {
+            $deleted = Favorito::where('cliente_id', $user->id)
+                ->where('prestador_id', $prestadorId)
+                ->delete();
 
-        if (!$favorito) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Prestador não está nos favoritos'
-            ], 404);
+            if (!$deleted) {
+                return response()->json(['success' => false, 'error' => 'Prestador não está nos favoritos'], 404);
+            }
+
+            DB::commit();
+            Cache::forget("cliente_favoritos_{$user->id}");
+
+            return response()->json(['success' => true, 'message' => 'Prestador removido dos favoritos']);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            Log::error('Erro ao remover favorito: ' . $e->getMessage());
+            return response()->json(['success' => false, 'error' => 'Erro ao remover favorito'], 500);
         }
-
-        $favorito->delete();
-
-        // Limpar cache
-        Cache::forget("cliente_favoritos_{$user->id}");
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Prestador removido dos favoritos'
-        ]);
     }
 
     /**
@@ -719,43 +744,32 @@ class ClienteController extends Controller
         $user = $request->user();
         $cacheKey = "cliente_favorito_check_{$user->id}_{$prestadorId}";
 
-        $isFavorito = Cache::remember($cacheKey, 600, function () use ($user, $prestadorId) {
+        $isFavorito = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user, $prestadorId) {
             return Favorito::where('cliente_id', $user->id)
                 ->where('prestador_id', $prestadorId)
                 ->exists();
         });
 
-        return response()->json([
-            'success' => true,
-            'data' => ['is_favorito' => $isFavorito]
-        ]);
+        return response()->json(['success' => true, 'data' => ['is_favorito' => $isFavorito]]);
     }
 
     // ==========================================
     // 5. MÉTODOS AUXILIARES PARA LIMPAR CACHE
     // ==========================================
 
-    /**
-     * Limpar cache do cliente
-     */
     private function clearClienteCache($userId)
     {
-        $statuses = ['pendente', 'confirmado', 'concluido', 'cancelado', null];
-        foreach ($statuses as $status) {
-            for ($page = 1; $page <= 5; $page++) {
-                $statusKey = $status ?: 'all';
-                Cache::forget("cliente_pedidos_{$userId}_{$statusKey}_{$page}");
-            }
-        }
-
-        Cache::forget("cliente_avaliacoes_{$userId}_1");
         Cache::forget("cliente_favoritos_{$userId}");
-        Cache::forget("dashboard_{$userId}");
+        Cache::forget("cliente_avaliacoes_{$userId}_10");
+        Cache::forget("cliente_meus_pedidos_{$userId}_20");
+
+        for ($page = 1; $page <= 3; $page++) {
+            Cache::forget("cliente_pedidos_{$userId}_all_{$page}");
+            Cache::forget("cliente_pedidos_{$userId}_pendente_{$page}");
+            Cache::forget("cliente_pedidos_{$userId}_concluido_{$page}");
+        }
     }
 
-    /**
-     * Limpar cache do prestador
-     */
     private function clearPrestadorCache($prestadorId)
     {
         Cache::forget("prestador_stats_{$prestadorId}");

@@ -38,7 +38,7 @@ class UserSeeder extends Seeder
                 'telefone' => '841234567',
                 'endereco' => 'Maputo',
                 'foto' => null,
-                'password' => Hash::make('@dm!n12&'),
+                'password' => Hash::make('@dm!n321'),
                 'tipo' => 'admin',
                 'verificado' => true,
                 'ativo' => true,
