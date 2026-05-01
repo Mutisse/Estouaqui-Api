@@ -31,6 +31,17 @@ class PrestadorController extends Controller
     private const MAX_LIMIT = 50;
     private const DEFAULT_LIMIT = 20;
 
+    // Mapeamento de dias do banco para o frontend
+    private const DIAS_MAP = [
+        'seg' => 'segunda',
+        'ter' => 'terca',
+        'qua' => 'quarta',
+        'qui' => 'quinta',
+        'sex' => 'sexta',
+        'sab' => 'sabado',
+        'dom' => 'domingo',
+    ];
+
     // ==========================================
     // 1. REGISTRO DO PRESTADOR
     // ==========================================
@@ -329,27 +340,34 @@ class PrestadorController extends Controller
             if ($userModel && $userModel->preferences) {
                 $preferences = is_array($userModel->preferences) ? $userModel->preferences : json_decode($userModel->preferences, true);
                 if (!empty($preferences['categorias'])) {
-                    $categoriasFromPreferences = DB::table('categorias')
-                        ->whereIn('id', $preferences['categorias'])
-                        ->select(['id', 'nome', 'slug', 'icone', 'cor'])
-                        ->get();
+                    // Remover categorias inválidas (que não existem no banco)
+                    $categoriasValidas = array_filter($preferences['categorias'], function($cat) {
+                        return is_numeric($cat) && Categoria::where('id', $cat)->exists();
+                    });
 
-                    if ($categoriasFromPreferences->isNotEmpty()) {
-                        $insertData = $categoriasFromPreferences->map(fn($cat) => [
-                            'user_id' => $user->id,
-                            'categoria_id' => $cat->id,
-                            'created_at' => now(),
-                            'updated_at' => now(),
-                        ])->toArray();
-                        DB::table('prestador_categorias')->insert($insertData);
+                    if (!empty($categoriasValidas)) {
+                        $categoriasFromPreferences = DB::table('categorias')
+                            ->whereIn('id', $categoriasValidas)
+                            ->select(['id', 'nome', 'slug', 'icone', 'cor'])
+                            ->get();
 
-                        return $categoriasFromPreferences->map(fn($cat) => [
-                            'id' => (int) $cat->id,
-                            'nome' => (string) $cat->nome,
-                            'slug' => (string) ($cat->slug ?? ''),
-                            'icone' => (string) ($cat->icone ?? 'category'),
-                            'cor' => (string) ($cat->cor ?? 'primary'),
-                        ])->toArray();
+                        if ($categoriasFromPreferences->isNotEmpty()) {
+                            $insertData = $categoriasFromPreferences->map(fn($cat) => [
+                                'user_id' => $user->id,
+                                'categoria_id' => $cat->id,
+                                'created_at' => now(),
+                                'updated_at' => now(),
+                            ])->toArray();
+                            DB::table('prestador_categorias')->insert($insertData);
+
+                            return $categoriasFromPreferences->map(fn($cat) => [
+                                'id' => (int) $cat->id,
+                                'nome' => (string) $cat->nome,
+                                'slug' => (string) ($cat->slug ?? ''),
+                                'icone' => (string) ($cat->icone ?? 'category'),
+                                'cor' => (string) ($cat->cor ?? 'primary'),
+                            ])->toArray();
+                        }
                     }
                 }
             }
@@ -728,7 +746,13 @@ class PrestadorController extends Controller
             $result = DB::table('pedidos')->where('prestador_id', $userId)
                 ->selectRaw("COUNT(CASE WHEN status = 'pendente' THEN 1 END) as pedidos_pendentes, COUNT(CASE WHEN status IN ('aceito', 'em_andamento') AND DATE(data) = CURDATE() THEN 1 END) as servicos_hoje, COALESCE(SUM(CASE WHEN status = 'concluido' AND MONTH(created_at) = MONTH(NOW()) THEN valor ELSE 0 END), 0) as ganhos_mes, COALESCE(AVG(CASE WHEN status = 'concluido' THEN valor ELSE NULL END), 0) as ticket_medio")->first();
             $mediaAvaliacao = DB::table('avaliacoes')->where('prestador_id', $userId)->avg('nota');
-            return ['pedidos_pendentes' => (int) ($result->pedidos_pendentes ?? 0), 'servicos_hoje' => (int) ($result->servicos_hoje ?? 0), 'avaliacao_media' => round($mediaAvaliacao ?? 0, 1), 'ganhos_mes' => (float) ($result->ganhos_mes ?? 0), 'ticket_medio' => (float) ($result->ticket_medio ?? 0)];
+            return [
+                'pedidos_pendentes' => (int) ($result->pedidos_pendentes ?? 0),
+                'servicos_hoje' => (int) ($result->servicos_hoje ?? 0),
+                'avaliacao_media' => round($mediaAvaliacao ?? 0, 1),
+                'ganhos_mes' => (float) ($result->ganhos_mes ?? 0),
+                'ticket_medio' => (float) ($result->ticket_medio ?? 0),
+            ];
         });
         return response()->json(['success' => true, 'data' => $stats]);
     }
@@ -742,7 +766,12 @@ class PrestadorController extends Controller
         $ganhos = Cache::remember("prestador_ganhos_{$userId}", self::CACHE_MEDIUM, function () use ($userId) {
             $result = DB::table('pedidos')->where('prestador_id', $userId)
                 ->selectRaw("COALESCE(SUM(CASE WHEN status = 'concluido' THEN valor ELSE 0 END), 0) as total, COALESCE(SUM(CASE WHEN status = 'concluido' AND MONTH(created_at) = MONTH(NOW()) THEN valor ELSE 0 END), 0) as mes, COALESCE(SUM(CASE WHEN status = 'concluido' AND WEEK(created_at) = WEEK(NOW()) THEN valor ELSE 0 END), 0) as semana, COALESCE(SUM(CASE WHEN status IN ('pendente', 'aceito', 'em_andamento') THEN valor ELSE 0 END), 0) as pendente")->first();
-            return ['total' => (float) ($result->total ?? 0), 'mes' => (float) ($result->mes ?? 0), 'semana' => (float) ($result->semana ?? 0), 'pendente' => (float) ($result->pendente ?? 0)];
+            return [
+                'total' => (float) ($result->total ?? 0),
+                'mes' => (float) ($result->mes ?? 0),
+                'semana' => (float) ($result->semana ?? 0),
+                'pendente' => (float) ($result->pendente ?? 0),
+            ];
         });
         return response()->json(['success' => true, 'data' => $ganhos]);
     }
@@ -751,7 +780,15 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $saques = Cache::remember("prestador_saques_{$user->id}", self::CACHE_MEDIUM, function () use ($user) {
-            return Transacao::where('user_id', $user->id)->where('tipo', 'saque')->select(['id', 'numero', 'valor', 'status', 'metodo', 'descricao', 'created_at'])->orderBy('created_at', 'desc')->get()->map(fn($s) => ['id' => (int) $s->id, 'numero' => (string) $s->numero, 'valor' => (float) $s->valor, 'status' => (string) $s->status, 'metodo' => (string) $s->metodo, 'descricao' => $s->descricao, 'created_at' => $s->created_at?->toISOString()])->toArray();
+            return Transacao::where('user_id', $user->id)->where('tipo', 'saque')->select(['id', 'numero', 'valor', 'status', 'metodo', 'descricao', 'created_at'])->orderBy('created_at', 'desc')->get()->map(fn($s) => [
+                'id' => (int) $s->id,
+                'numero' => (string) $s->numero,
+                'valor' => (float) $s->valor,
+                'status' => (string) $s->status,
+                'metodo' => (string) $s->metodo,
+                'descricao' => $s->descricao,
+                'created_at' => $s->created_at?->toISOString(),
+            ])->toArray();
         });
         return response()->json(['success' => true, 'data' => $saques]);
     }
@@ -759,14 +796,34 @@ class PrestadorController extends Controller
     public function solicitarSaque(Request $request)
     {
         $user = $request->user();
-        $validator = Validator::make($request->all(), ['valor' => 'required|numeric|min:100', 'metodo' => 'required|in:mpesa,bancario', 'conta' => 'required|string|max:255']);
-        if ($validator->fails()) return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        $validator = Validator::make($request->all(), [
+            'valor' => 'required|numeric|min:100',
+            'metodo' => 'required|in:mpesa,bancario',
+            'conta' => 'required|string|max:255',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        }
+
         $saldoDisponivel = Pedido::where('prestador_id', $user->id)->where('status', 'concluido')->sum('valor');
         $saquesPendentes = Transacao::where('user_id', $user->id)->where('tipo', 'saque')->where('status', 'pendente')->sum('valor');
         $saldo = $saldoDisponivel - $saquesPendentes;
-        if ($request->valor > $saldo) return response()->json(['success' => false, 'error' => 'Saldo insuficiente'], 422);
+
+        if ($request->valor > $saldo) {
+            return response()->json(['success' => false, 'error' => 'Saldo insuficiente'], 422);
+        }
+
         try {
-            $saque = Transacao::create(['user_id' => $user->id, 'numero' => 'SAQ-' . strtoupper(uniqid()), 'tipo' => 'saque', 'status' => 'pendente', 'valor' => $request->valor, 'descricao' => "Solicitação de saque via {$request->metodo}", 'metodo' => $request->metodo, 'detalhes' => json_encode(['conta' => $request->conta])]);
+            $saque = Transacao::create([
+                'user_id' => $user->id,
+                'numero' => 'SAQ-' . strtoupper(uniqid()),
+                'tipo' => 'saque',
+                'status' => 'pendente',
+                'valor' => $request->valor,
+                'descricao' => "Solicitação de saque via {$request->metodo}",
+                'metodo' => $request->metodo,
+                'detalhes' => json_encode(['conta' => $request->conta]),
+            ]);
             $this->clearPrestadorCache($user->id);
             return response()->json(['success' => true, 'message' => 'Saque solicitado com sucesso', 'data' => $saque], 201);
         } catch (\Exception $e) {
@@ -793,7 +850,35 @@ class PrestadorController extends Controller
         $userId = $request->user()->id;
         $limit = min($request->query('limit', 5), 20);
         $servicos = Cache::remember("prestador_proximos_servicos_{$userId}_{$limit}", self::CACHE_MEDIUM, function () use ($userId, $limit) {
-            return Pedido::where('prestador_id', $userId)->whereIn('status', ['aceito', 'confirmado', 'em_andamento'])->whereDate('data', '>=', now())->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco'])->select(['id', 'numero', 'data', 'endereco', 'status', 'valor', 'observacoes', 'cliente_id', 'servico_id'])->orderBy('data', 'asc')->limit($limit)->get()->map(fn($p) => ['id' => (int) $p->id, 'numero' => (string) $p->numero, 'cliente' => $p->cliente ? ['id' => (int) $p->cliente->id, 'nome' => (string) $p->cliente->nome, 'foto' => $p->cliente->foto ? asset('storage/' . $p->cliente->foto) : null, 'telefone' => (string) $p->cliente->telefone] : null, 'servico' => $p->servico ? ['id' => (int) $p->servico->id, 'nome' => (string) $p->servico->nome, 'preco' => (float) $p->servico->preco] : null, 'data' => $p->data ? (string) $p->data : null, 'endereco' => (string) $p->endereco, 'status' => (string) $p->status, 'valor' => (float) ($p->valor ?? 0), 'observacoes' => $p->observacoes])->toArray();
+            return Pedido::where('prestador_id', $userId)
+                ->whereIn('status', ['aceito', 'confirmado', 'em_andamento'])
+                ->whereDate('data', '>=', now())
+                ->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco'])
+                ->select(['id', 'numero', 'data', 'endereco', 'status', 'valor', 'observacoes', 'cliente_id', 'servico_id'])
+                ->orderBy('data', 'asc')
+                ->limit($limit)
+                ->get()
+                ->map(fn($p) => [
+                    'id' => (int) $p->id,
+                    'numero' => (string) $p->numero,
+                    'cliente' => $p->cliente ? [
+                        'id' => (int) $p->cliente->id,
+                        'nome' => (string) $p->cliente->nome,
+                        'foto' => $p->cliente->foto ? asset('storage/' . $p->cliente->foto) : null,
+                        'telefone' => (string) $p->cliente->telefone,
+                    ] : null,
+                    'servico' => $p->servico ? [
+                        'id' => (int) $p->servico->id,
+                        'nome' => (string) $p->servico->nome,
+                        'preco' => (float) $p->servico->preco,
+                    ] : null,
+                    'data' => $p->data ? (string) $p->data : null,
+                    'endereco' => (string) $p->endereco,
+                    'status' => (string) $p->status,
+                    'valor' => (float) ($p->valor ?? 0),
+                    'observacoes' => $p->observacoes,
+                ])
+                ->toArray();
         });
         return response()->json(['success' => true, 'data' => $servicos]);
     }
@@ -803,7 +888,24 @@ class PrestadorController extends Controller
         $userId = $request->user()->id;
         $limit = min($request->query('limit', 5), 20);
         $avaliacoes = Cache::remember("prestador_avaliacoes_recentes_{$userId}_{$limit}", self::CACHE_MEDIUM, function () use ($userId, $limit) {
-            return Avaliacao::where('prestador_id', $userId)->with('cliente:id,nome,foto')->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])->orderBy('created_at', 'desc')->limit($limit)->get()->map(fn($a) => ['id' => (int) $a->id, 'nota' => (int) $a->nota, 'comentario' => $a->comentario, 'created_at' => $a->created_at?->toISOString(), 'cliente' => $a->cliente ? ['id' => (int) $a->cliente->id, 'nome' => (string) $a->cliente->nome, 'foto' => $a->cliente->foto ? asset('storage/' . $a->cliente->foto) : null] : null])->toArray();
+            return Avaliacao::where('prestador_id', $userId)
+                ->with('cliente:id,nome,foto')
+                ->select(['id', 'nota', 'comentario', 'created_at', 'cliente_id'])
+                ->orderBy('created_at', 'desc')
+                ->limit($limit)
+                ->get()
+                ->map(fn($a) => [
+                    'id' => (int) $a->id,
+                    'nota' => (int) $a->nota,
+                    'comentario' => $a->comentario,
+                    'created_at' => $a->created_at?->toISOString(),
+                    'cliente' => $a->cliente ? [
+                        'id' => (int) $a->cliente->id,
+                        'nome' => (string) $a->cliente->nome,
+                        'foto' => $a->cliente->foto ? asset('storage/' . $a->cliente->foto) : null,
+                    ] : null,
+                ])
+                ->toArray();
         });
         return response()->json(['success' => true, 'data' => $avaliacoes]);
     }
@@ -815,7 +917,19 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $intervalos = Cache::remember("prestador_intervalos_{$user->id}", self::CACHE_LONG, function () use ($user) {
-            return PrestadorIntervalo::where('prestador_id', $user->id)->orderBy('created_at', 'desc')->get()->map(fn($i) => ['id' => (int) $i->id, 'dias' => $i->dias, 'inicio' => (string) $i->inicio, 'fim' => (string) $i->fim, 'descricao' => $i->descricao, 'ativo' => (bool) $i->ativo, 'created_at' => $i->created_at?->toISOString()])->toArray();
+            return PrestadorIntervalo::where('prestador_id', $user->id)
+                ->orderBy('created_at', 'desc')
+                ->get()
+                ->map(fn($i) => [
+                    'id' => (int) $i->id,
+                    'dias' => $i->dias,
+                    'inicio' => (string) $i->inicio,
+                    'fim' => (string) $i->fim,
+                    'descricao' => $i->descricao,
+                    'ativo' => (bool) $i->ativo,
+                    'created_at' => $i->created_at?->toISOString(),
+                ])
+                ->toArray();
         });
         return response()->json(['success' => true, 'data' => $intervalos]);
     }
@@ -823,10 +937,25 @@ class PrestadorController extends Controller
     public function criarIntervalo(Request $request)
     {
         $user = $request->user();
-        $validator = Validator::make($request->all(), ['dias' => 'required|array|min:1', 'dias.*' => 'string', 'inicio' => 'required|date_format:H:i', 'fim' => 'required|date_format:H:i|after:inicio', 'descricao' => 'nullable|string|max:255']);
-        if ($validator->fails()) return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        $validator = Validator::make($request->all(), [
+            'dias' => 'required|array|min:1',
+            'dias.*' => 'string',
+            'inicio' => 'required|date_format:H:i',
+            'fim' => 'required|date_format:H:i|after:inicio',
+            'descricao' => 'nullable|string|max:255',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        }
         try {
-            $intervalo = PrestadorIntervalo::create(['prestador_id' => $user->id, 'dias' => $request->dias, 'inicio' => $request->inicio, 'fim' => $request->fim, 'descricao' => $request->descricao, 'ativo' => true]);
+            $intervalo = PrestadorIntervalo::create([
+                'prestador_id' => $user->id,
+                'dias' => $request->dias,
+                'inicio' => $request->inicio,
+                'fim' => $request->fim,
+                'descricao' => $request->descricao,
+                'ativo' => true,
+            ]);
             $this->clearPrestadorCache($user->id);
             return response()->json(['success' => true, 'message' => 'Intervalo criado com sucesso', 'data' => $intervalo], 201);
         } catch (\Exception $e) {
@@ -839,9 +968,20 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $intervalo = PrestadorIntervalo::where('prestador_id', $user->id)->find($id);
-        if (!$intervalo) return response()->json(['success' => false, 'error' => 'Intervalo não encontrado'], 404);
-        $validator = Validator::make($request->all(), ['dias' => 'sometimes|array|min:1', 'dias.*' => 'string', 'inicio' => 'sometimes|date_format:H:i', 'fim' => 'sometimes|date_format:H:i|after:inicio', 'descricao' => 'nullable|string|max:255', 'ativo' => 'sometimes|boolean']);
-        if ($validator->fails()) return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        if (!$intervalo) {
+            return response()->json(['success' => false, 'error' => 'Intervalo não encontrado'], 404);
+        }
+        $validator = Validator::make($request->all(), [
+            'dias' => 'sometimes|array|min:1',
+            'dias.*' => 'string',
+            'inicio' => 'sometimes|date_format:H:i',
+            'fim' => 'sometimes|date_format:H:i|after:inicio',
+            'descricao' => 'nullable|string|max:255',
+            'ativo' => 'sometimes|boolean',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        }
         try {
             if ($request->has('dias')) $intervalo->dias = $request->dias;
             if ($request->has('inicio')) $intervalo->inicio = $request->inicio;
@@ -861,39 +1001,184 @@ class PrestadorController extends Controller
     {
         $user = $request->user();
         $intervalo = PrestadorIntervalo::where('prestador_id', $user->id)->find($id);
-        if (!$intervalo) return response()->json(['success' => false, 'error' => 'Intervalo não encontrado'], 404);
+        if (!$intervalo) {
+            return response()->json(['success' => false, 'error' => 'Intervalo não encontrado'], 404);
+        }
         $intervalo->delete();
         $this->clearPrestadorCache($user->id);
         return response()->json(['success' => true, 'message' => 'Intervalo removido']);
     }
 
     // ==========================================
-    // 11. DISPONIBILIDADE DO PRESTADOR
+    // 11. DISPONIBILIDADE DO PRESTADOR - CORRIGIDA
     // ==========================================
     public function getDisponibilidade(Request $request)
     {
         $user = $request->user();
-        $disponibilidade = Cache::remember("prestador_disponibilidade_{$user->id}", self::CACHE_LONG, function () use ($user) {
+        $cacheKey = "prestador_disponibilidade_{$user->id}";
+
+        $disponibilidade = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
             $disponibilidade = PrestadorDisponibilidade::where('prestador_id', $user->id)->first();
+
             if (!$disponibilidade) {
-                $disponibilidade = PrestadorDisponibilidade::create(['prestador_id' => $user->id, 'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(), 'horarios_padrao' => PrestadorDisponibilidade::getDefaultHorariosPadrao(), 'intervalos_padrao' => PrestadorDisponibilidade::getDefaultIntervalosPadrao(), 'ativo' => true]);
+                $disponibilidade = PrestadorDisponibilidade::create([
+                    'prestador_id' => $user->id,
+                    'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
+                    'horarios_padrao' => PrestadorDisponibilidade::getDefaultHorariosPadrao(),
+                    'intervalos_padrao' => PrestadorDisponibilidade::getDefaultIntervalosPadrao(),
+                    'ativo' => true,
+                ]);
             }
-            return $disponibilidade;
+
+            // ✅ CONVERTER horarios_padrao para o formato do frontend
+            $horariosConvertidos = $this->converterHorariosParaFrontend($disponibilidade->horarios_padrao);
+
+            return [
+                'id' => $disponibilidade->id,
+                'prestador_id' => $disponibilidade->prestador_id,
+                'configuracoes' => $disponibilidade->configuracoes,
+                'horarios_padrao' => $horariosConvertidos,
+                'intervalos_padrao' => $disponibilidade->intervalos_padrao ?? [],
+                'ativo' => $disponibilidade->ativo,
+                'created_at' => $disponibilidade->created_at?->toISOString(),
+                'updated_at' => $disponibilidade->updated_at?->toISOString(),
+            ];
         });
-        return response()->json(['success' => true, 'data' => $disponibilidade]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $disponibilidade
+        ]);
+    }
+
+    /**
+     * Converte horarios_padrao do formato do banco para o formato do frontend
+     *
+     * @param array|string|null $horariosPadrao
+     * @return array
+     */
+    private function converterHorariosParaFrontend($horariosPadrao): array
+    {
+        if (empty($horariosPadrao)) {
+            return [];
+        }
+
+        // Se for string JSON, decodificar
+        if (is_string($horariosPadrao)) {
+            $horariosPadrao = json_decode($horariosPadrao, true);
+        }
+
+        if (!is_array($horariosPadrao)) {
+            return [];
+        }
+
+        $resultado = [];
+
+        foreach ($horariosPadrao as $dia => $config) {
+            // Usar o mapeamento para o nome do dia no frontend
+            $nomeDia = self::DIAS_MAP[$dia] ?? $dia;
+
+            // Se for o formato antigo {ativo: true, horario: "8h-17h"}
+            if (is_array($config) && isset($config['ativo'])) {
+                if ($config['ativo'] && !empty($config['horario'])) {
+                    // Horário específico - converter string "8h-17h" para array de horas
+                    $resultado[$nomeDia] = $this->converterHorarioStringParaArray($config['horario']);
+                } elseif ($config['ativo']) {
+                    // Ativo sem horário específico - usar horários padrão
+                    $resultado[$nomeDia] = $this->getHorariosPadraoPorDia($nomeDia);
+                }
+            }
+            // Se for o formato já correto (array de strings)
+            else if (is_array($config) && !isset($config['ativo'])) {
+                $resultado[$nomeDia] = $config;
+            }
+            // Se for string simples
+            else if (is_string($config) && !empty($config)) {
+                $resultado[$nomeDia] = $this->converterHorarioStringParaArray($config);
+            }
+        }
+
+        return $resultado;
+    }
+
+    /**
+     * Converte string de horário "8h-17h" para array de horas
+     *
+     * @param string $horarioString
+     * @return array
+     */
+    private function converterHorarioStringParaArray(string $horarioString): array
+    {
+        // Se já estiver no formato "08:00", retornar como array
+        if (preg_match('/^\d{2}:\d{2}$/', $horarioString)) {
+            return [$horarioString];
+        }
+
+        // Tentar extrair horários no formato "8h-17h" ou "8h às 17h"
+        if (preg_match('/(\d{1,2})h?\s*[-–—]\s*(\d{1,2})h?/', $horarioString, $matches)) {
+            $inicio = (int) $matches[1];
+            $fim = (int) $matches[2];
+
+            $horarios = [];
+            for ($h = $inicio; $h < $fim; $h++) {
+                $horarios[] = sprintf("%02d:00", $h);
+            }
+            return $horarios;
+        }
+
+        // Fallback: horário comercial padrão
+        return ['08:00', '09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00'];
+    }
+
+    /**
+     * Retorna horários padrão por dia da semana
+     *
+     * @param string $dia
+     * @return array
+     */
+    private function getHorariosPadraoPorDia(string $dia): array
+    {
+        $diasComHorarioCompleto = ['segunda', 'terca', 'quarta', 'quinta', 'sexta'];
+        $diasComHorarioReduzido = ['sabado'];
+
+        if (in_array($dia, $diasComHorarioCompleto)) {
+            return ['08:00', '09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00'];
+        }
+
+        if (in_array($dia, $diasComHorarioReduzido)) {
+            return ['08:00', '09:00', '10:00', '11:00'];
+        }
+
+        return [];
     }
 
     public function updateDisponibilidade(Request $request)
     {
         $user = $request->user();
-        $validator = Validator::make($request->all(), ['configuracoes' => 'sometimes|array', 'horarios_padrao' => 'sometimes|array', 'intervalos_padrao' => 'sometimes|array']);
-        if ($validator->fails()) return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        $validator = Validator::make($request->all(), [
+            'configuracoes' => 'sometimes|array',
+            'horarios_padrao' => 'sometimes|array',
+            'intervalos_padrao' => 'sometimes|array',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['success' => false, 'error' => $validator->errors()->first()], 422);
+        }
         try {
             $disponibilidade = PrestadorDisponibilidade::where('prestador_id', $user->id)->first();
-            if (!$disponibilidade) $disponibilidade = new PrestadorDisponibilidade(['prestador_id' => $user->id]);
-            if ($request->has('configuracoes')) $disponibilidade->configuracoes = array_merge(PrestadorDisponibilidade::getDefaultConfiguracoes(), $request->configuracoes);
-            if ($request->has('horarios_padrao')) $disponibilidade->horarios_padrao = $request->horarios_padrao;
-            if ($request->has('intervalos_padrao')) $disponibilidade->intervalos_padrao = $request->intervalos_padrao;
+            if (!$disponibilidade) {
+                $disponibilidade = new PrestadorDisponibilidade();
+                $disponibilidade->prestador_id = $user->id;
+            }
+            if ($request->has('configuracoes')) {
+                $disponibilidade->configuracoes = array_merge(PrestadorDisponibilidade::getDefaultConfiguracoes(), $request->configuracoes);
+            }
+            if ($request->has('horarios_padrao')) {
+                // Converter do formato do frontend para o formato do banco
+                $disponibilidade->horarios_padrao = $request->horarios_padrao;
+            }
+            if ($request->has('intervalos_padrao')) {
+                $disponibilidade->intervalos_padrao = $request->intervalos_padrao;
+            }
             $disponibilidade->save();
             $this->clearPrestadorCache($user->id);
             return response()->json(['success' => true, 'message' => 'Configurações atualizadas', 'data' => $disponibilidade]);
@@ -911,7 +1196,9 @@ class PrestadorController extends Controller
         if (!$categoriasInput) return [];
         $categoriasData = is_string($categoriasInput) ? json_decode($categoriasInput, true) : $categoriasInput;
         if (!is_array($categoriasData)) return [];
-        if (isset($categoriasData[0]['value'])) return array_column($categoriasData, 'value');
+        if (isset($categoriasData[0]['value'])) {
+            return array_column($categoriasData, 'value');
+        }
         return $categoriasData;
     }
 
@@ -919,11 +1206,21 @@ class PrestadorController extends Controller
     {
         if (!empty($profissaoManual)) return $profissaoManual;
         if (empty($categoriasIds)) return 'Prestador de Serviços';
-        $categoriasNomes = DB::table('categorias')->whereIn('id', $categoriasIds)->pluck('nome')->toArray();
+
+        $categoriasNomes = DB::table('categorias')
+            ->whereIn('id', $categoriasIds)
+            ->pluck('nome')
+            ->toArray();
+
         if (empty($categoriasNomes)) return 'Prestador de Serviços';
+
         $count = count($categoriasNomes);
-        if ($count === 1) return $categoriasNomes[0] . ' Profissional';
-        if ($count === 2) return $categoriasNomes[0] . ' e ' . $categoriasNomes[1];
+        if ($count === 1) {
+            return $categoriasNomes[0] . ' Profissional';
+        }
+        if ($count === 2) {
+            return $categoriasNomes[0] . ' e ' . $categoriasNomes[1];
+        }
         return $categoriasNomes[0] . ' e outros serviços';
     }
 
@@ -933,7 +1230,9 @@ class PrestadorController extends Controller
         for ($i = 0; $i < 3; $i++) {
             if ($request->hasFile("portfolio.{$i}")) {
                 $file = $request->file("portfolio.{$i}");
-                if ($file && $file->isValid()) $portfolioPaths[] = $file->store('fotos/portfolio', 'public');
+                if ($file && $file->isValid()) {
+                    $portfolioPaths[] = $file->store('fotos/portfolio', 'public');
+                }
             }
         }
         return $portfolioPaths;
@@ -947,18 +1246,47 @@ class PrestadorController extends Controller
 
     private function buildUserData(Request $request, string $profissao, array $categoriasIds, array $portfolioPaths, array $disponibilidadeData): array
     {
-        return ['nome' => $request->nome, 'email' => $request->email, 'telefone' => $request->telefone, 'password' => Hash::make($request->password), 'endereco' => $request->endereco, 'tipo' => 'prestador', 'profissao' => $profissao, 'sobre' => $request->sobre ?? $request->descricao, 'latitude' => $request->latitude, 'longitude' => $request->longitude, 'preferences' => json_encode(['descricao' => $request->descricao, 'categorias' => $categoriasIds, 'portfolio' => $portfolioPaths, 'raio' => $request->raio, 'disponibilidade' => $disponibilidadeData])];
+        return [
+            'nome' => $request->nome,
+            'email' => $request->email,
+            'telefone' => $request->telefone,
+            'password' => Hash::make($request->password),
+            'endereco' => $request->endereco,
+            'tipo' => 'prestador',
+            'profissao' => $profissao,
+            'sobre' => $request->sobre ?? $request->descricao,
+            'latitude' => $request->latitude,
+            'longitude' => $request->longitude,
+            'preferences' => json_encode([
+                'descricao' => $request->descricao,
+                'categorias' => $categoriasIds,
+                'portfolio' => $portfolioPaths,
+                'raio' => $request->raio,
+                'disponibilidade' => $disponibilidadeData,
+            ]),
+        ];
     }
 
     private function saveCategorias(int $userId, array $categoriasIds): void
     {
         if (empty($categoriasIds)) return;
+
         $validCategories = [];
         foreach ($categoriasIds as $categoriaId) {
-            if (Categoria::where('id', $categoriaId)->exists()) $validCategories[] = $categoriaId;
+            if (Categoria::where('id', $categoriaId)->exists()) {
+                $validCategories[] = $categoriaId;
+            }
         }
+
         if (empty($validCategories)) return;
-        $insertData = array_map(fn($catId) => ['user_id' => $userId, 'categoria_id' => $catId, 'created_at' => now(), 'updated_at' => now()], $validCategories);
+
+        $insertData = array_map(fn($catId) => [
+            'user_id' => $userId,
+            'categoria_id' => $catId,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], $validCategories);
+
         DB::table('prestador_categorias')->insert($insertData);
     }
 
@@ -966,7 +1294,15 @@ class PrestadorController extends Controller
     {
         if (empty($disponibilidadeData)) return;
         try {
-            PrestadorDisponibilidade::updateOrCreate(['prestador_id' => $userId], ['configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(), 'horarios_padrao' => $disponibilidadeData, 'intervalos_padrao' => [], 'ativo' => true]);
+            PrestadorDisponibilidade::updateOrCreate(
+                ['prestador_id' => $userId],
+                [
+                    'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
+                    'horarios_padrao' => $disponibilidadeData,
+                    'intervalos_padrao' => [],
+                    'ativo' => true,
+                ]
+            );
         } catch (\Exception $e) {
             Log::warning("Erro ao salvar disponibilidade: " . $e->getMessage());
         }
@@ -975,53 +1311,141 @@ class PrestadorController extends Controller
     private function buscarCategoriasEmLote(array $prestadorIds): array
     {
         if (empty($prestadorIds)) return [];
-        $categorias = DB::table('prestador_categorias')->whereIn('user_id', $prestadorIds)->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor')->get();
+
+        $categorias = DB::table('prestador_categorias')
+            ->whereIn('user_id', $prestadorIds)
+            ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+            ->select('prestador_categorias.user_id', 'categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor')
+            ->get();
+
         $map = [];
-        foreach ($categorias as $cat) $map[$cat->user_id][] = ['id' => (int) $cat->id, 'nome' => (string) $cat->nome, 'icone' => (string) ($cat->icone ?? 'category'), 'cor' => (string) ($cat->cor ?? 'primary')];
+        foreach ($categorias as $cat) {
+            $map[$cat->user_id][] = [
+                'id' => (int) $cat->id,
+                'nome' => (string) $cat->nome,
+                'icone' => (string) ($cat->icone ?? 'category'),
+                'cor' => (string) ($cat->cor ?? 'primary'),
+            ];
+        }
         return $map;
     }
 
     private function getPortfolioUrls(array $preferences): array
     {
         if (empty($preferences['portfolio'])) return [];
-        return array_map(fn($path) => asset('storage/' . $path), array_slice($preferences['portfolio'], 0, 6));
+        return array_map(
+            fn($path) => asset('storage/' . $path),
+            array_slice($preferences['portfolio'], 0, 6)
+        );
     }
 
     private function getServicosPrestador(int $prestadorId): array
     {
-        return DB::table('servicos')->where('prestador_id', $prestadorId)->where('ativo', true)->select(['id', 'nome', 'preco', 'duracao', 'descricao', 'icone'])->limit(10)->get()->map(fn($s) => ['id' => (int) $s->id, 'nome' => (string) $s->nome, 'preco' => (float) $s->preco, 'duracao' => (int) $s->duracao, 'descricao' => $s->descricao, 'icone' => (string) ($s->icone ?? 'handyman')])->toArray();
+        return DB::table('servicos')
+            ->where('prestador_id', $prestadorId)
+            ->where('ativo', true)
+            ->select(['id', 'nome', 'preco', 'duracao', 'descricao', 'icone'])
+            ->limit(10)
+            ->get()
+            ->map(fn($s) => [
+                'id' => (int) $s->id,
+                'nome' => (string) $s->nome,
+                'preco' => (float) $s->preco,
+                'duracao' => (int) $s->duracao,
+                'descricao' => $s->descricao,
+                'icone' => (string) ($s->icone ?? 'handyman'),
+            ])
+            ->toArray();
     }
 
     private function getCategoriasPrestador(int $prestadorId): array
     {
-        return DB::table('prestador_categorias')->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')->where('prestador_categorias.user_id', $prestadorId)->select(['categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor'])->get()->map(fn($cat) => ['id' => (int) $cat->id, 'nome' => (string) $cat->nome, 'icone' => (string) ($cat->icone ?? 'category'), 'cor' => (string) ($cat->cor ?? 'primary')])->toArray();
+        return DB::table('prestador_categorias')
+            ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+            ->where('prestador_categorias.user_id', $prestadorId)
+            ->select(['categorias.id', 'categorias.nome', 'categorias.icone', 'categorias.cor'])
+            ->get()
+            ->map(fn($cat) => [
+                'id' => (int) $cat->id,
+                'nome' => (string) $cat->nome,
+                'icone' => (string) ($cat->icone ?? 'category'),
+                'cor' => (string) ($cat->cor ?? 'primary'),
+            ])
+            ->toArray();
     }
 
     private function getUltimasAvaliacoes(int $prestadorId): array
     {
-        return DB::table('avaliacoes')->where('prestador_id', $prestadorId)->leftJoin('users as clientes', 'avaliacoes.cliente_id', '=', 'clientes.id')->select(['avaliacoes.id', 'avaliacoes.nota', 'avaliacoes.comentario', 'avaliacoes.created_at', 'clientes.id as cliente_id', 'clientes.nome as cliente_nome', 'clientes.foto as cliente_foto'])->orderBy('avaliacoes.created_at', 'desc')->limit(5)->get()->map(fn($a) => ['id' => (int) $a->id, 'nota' => (int) $a->nota, 'comentario' => $a->comentario, 'created_at' => $a->created_at, 'cliente' => $a->cliente_id ? ['id' => (int) $a->cliente_id, 'nome' => (string) $a->cliente_nome, 'foto' => $a->cliente_foto ? asset('storage/' . $a->cliente_foto) : null] : null])->toArray();
+        return DB::table('avaliacoes')
+            ->where('prestador_id', $prestadorId)
+            ->leftJoin('users as clientes', 'avaliacoes.cliente_id', '=', 'clientes.id')
+            ->select([
+                'avaliacoes.id',
+                'avaliacoes.nota',
+                'avaliacoes.comentario',
+                'avaliacoes.created_at',
+                'clientes.id as cliente_id',
+                'clientes.nome as cliente_nome',
+                'clientes.foto as cliente_foto'
+            ])
+            ->orderBy('avaliacoes.created_at', 'desc')
+            ->limit(5)
+            ->get()
+            ->map(fn($a) => [
+                'id' => (int) $a->id,
+                'nota' => (int) $a->nota,
+                'comentario' => $a->comentario,
+                'created_at' => $a->created_at,
+                'cliente' => $a->cliente_id ? [
+                    'id' => (int) $a->cliente_id,
+                    'nome' => (string) $a->cliente_nome,
+                    'foto' => $a->cliente_foto ? asset('storage/' . $a->cliente_foto) : null,
+                ] : null,
+            ])
+            ->toArray();
     }
 
     private function calcularDistancia($lat1, $lon1, $lat2, $lon2): float
     {
         if (!$lat1 || !$lon1 || !$lat2 || !$lon2) return 9999;
+
         $earthRadius = 6371;
         $latDelta = deg2rad($lat2 - $lat1);
         $lonDelta = deg2rad($lon2 - $lon1);
-        $a = sin($latDelta / 2) * sin($latDelta / 2) + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($lonDelta / 2) * sin($lonDelta / 2);
+
+        $a = sin($latDelta / 2) * sin($latDelta / 2) +
+            cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+            sin($lonDelta / 2) * sin($lonDelta / 2);
+
         return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
     }
 
     private function clearPrestadorCache($userId): void
     {
-        $keys = ["prestador_stats_{$userId}", "prestador_ganhos_{$userId}", "prestador_servicos_{$userId}", "prestador_intervalos_{$userId}", "prestador_disponibilidade_{$userId}", "prestador_saques_{$userId}", "prestador_categorias_{$userId}", "prestador_detalhes_{$userId}"];
-        foreach ($keys as $key) Cache::forget($key);
+        $keys = [
+            "prestador_stats_{$userId}",
+            "prestador_ganhos_{$userId}",
+            "prestador_servicos_{$userId}",
+            "prestador_intervalos_{$userId}",
+            "prestador_disponibilidade_{$userId}",
+            "prestador_saques_{$userId}",
+            "prestador_categorias_{$userId}",
+            "prestador_detalhes_{$userId}",
+        ];
+
+        foreach ($keys as $key) {
+            Cache::forget($key);
+        }
+
         for ($page = 1; $page <= 3; $page++) {
             Cache::forget("prestador_solicitacoes_{$userId}_all_{$page}");
             Cache::forget("prestador_historico_saques_{$userId}_{$page}");
         }
+
         foreach (['pendente', 'aceito', 'concluido', 'cancelado'] as $status) {
-            for ($page = 1; $page <= 3; $page++) Cache::forget("prestador_solicitacoes_{$userId}_{$status}_{$page}");
+            for ($page = 1; $page <= 3; $page++) {
+                Cache::forget("prestador_solicitacoes_{$userId}_{$status}_{$page}");
+            }
         }
     }
 
@@ -1033,6 +1457,11 @@ class PrestadorController extends Controller
 
     public function health()
     {
-        return response()->json(['success' => true, 'message' => 'API funcionando', 'timestamp' => now()->toISOString(), 'cache_driver' => config('cache.default')]);
+        return response()->json([
+            'success' => true,
+            'message' => 'API funcionando',
+            'timestamp' => now()->toISOString(),
+            'cache_driver' => config('cache.default')
+        ]);
     }
 }

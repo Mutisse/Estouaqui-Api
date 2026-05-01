@@ -26,30 +26,42 @@ class ServicoTipo extends Model
         'ativo' => 'boolean'
     ];
 
-    // Relação com serviços (se necessário)
+    // Relação com serviços
     public function servicos()
     {
         return $this->hasMany(Servico::class, 'tipo_id');
     }
 
-    // Lista padrão para seed
-    public static function getDefaultTipos(): array
+    // Escopo para tipos ativos
+    public function scopeAtivo($query)
     {
-        return [
-            ['nome' => 'Eletricista', 'slug' => 'eletricista', 'icone' => 'bolt', 'cor' => 'warning', 'ordem' => 1],
-            ['nome' => 'Canalizador', 'slug' => 'canalizador', 'icone' => 'water_drop', 'cor' => 'info', 'ordem' => 2],
-            ['nome' => 'Pintor', 'slug' => 'pintor', 'icone' => 'brush', 'cor' => 'accent', 'ordem' => 3],
-            ['nome' => 'Informático', 'slug' => 'informatico', 'icone' => 'computer', 'cor' => 'purple', 'ordem' => 4],
-            ['nome' => 'Cabeleireiro', 'slug' => 'cabeleireiro', 'icone' => 'content_cut', 'cor' => 'secondary', 'ordem' => 5],
-            ['nome' => 'Manicure', 'slug' => 'manicure', 'icone' => 'spa', 'cor' => 'pink', 'ordem' => 6],
-            ['nome' => 'Limpeza', 'slug' => 'limpeza', 'icone' => 'cleaning_services', 'cor' => 'positive', 'ordem' => 7],
-            ['nome' => 'Baby-sitter', 'slug' => 'baby-sitter', 'icone' => 'child_care', 'cor' => 'info', 'ordem' => 8],
-            ['nome' => 'Motorista', 'slug' => 'motorista', 'icone' => 'drive_eta', 'cor' => 'primary', 'ordem' => 9],
-            ['nome' => 'Costureira', 'slug' => 'costureira', 'icone' => 'sewing', 'cor' => 'secondary', 'ordem' => 10],
-            ['nome' => 'Jardinagem', 'slug' => 'jardinagem', 'icone' => 'yard', 'cor' => 'green', 'ordem' => 11],
-            ['nome' => 'Fotógrafo', 'slug' => 'fotografo', 'icone' => 'photo_camera', 'cor' => 'accent', 'ordem' => 12],
-            ['nome' => 'Personal Trainer', 'slug' => 'personal-trainer', 'icone' => 'fitness_center', 'cor' => 'warning', 'ordem' => 13],
-            ['nome' => 'Professor', 'slug' => 'professor', 'icone' => 'school', 'cor' => 'primary', 'ordem' => 14],
-        ];
+        return $query->where('ativo', true);
+    }
+
+    // Escopo para ordenação padrão
+    public function scopeOrdenado($query)
+    {
+        return $query->orderBy('ordem', 'asc')->orderBy('nome', 'asc');
+    }
+
+    // Buscar todos os tipos ativos ordenados
+    public static function getTiposAtivos()
+    {
+        return self::ativo()->ordenado()->get();
+    }
+
+    // Buscar por slug
+    public static function findBySlug(string $slug)
+    {
+        return self::where('slug', $slug)->first();
+    }
+
+    // Buscar tipos com contagem de serviços
+    public static function getTiposComContagem()
+    {
+        return self::withCount('servicos')
+            ->ativo()
+            ->ordenado()
+            ->get();
     }
 }
