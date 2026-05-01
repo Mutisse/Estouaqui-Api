@@ -32,11 +32,6 @@ class PrestadorController extends Controller
     // ==========================================
     // 1. REGISTRO DO PRESTADOR - CORRIGIDO
     // ==========================================
-    /**
-     * Registro de novo prestador - CORRIGIDO (salva categorias corretamente)
-     * POST /api/register/prestador
-     */
-   
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
@@ -103,19 +98,15 @@ class PrestadorController extends Controller
                     $count = count($categoriasNomes);
 
                     if ($count === 1) {
-                        // Uma categoria: "Eletricista Profissional"
                         $profissaoGerada = $categoriasNomes[0] . ' Profissional';
                     } elseif ($count === 2) {
-                        // Duas categorias: "Eletricista e Canalizador"
                         $profissaoGerada = $categoriasNomes[0] . ' e ' . $categoriasNomes[1];
                     } else {
-                        // Três ou mais: "Eletricista e outros serviços"
                         $profissaoGerada = $categoriasNomes[0] . ' e outros serviços';
                     }
                 }
             }
 
-            // Se o usuário enviou uma profissão manualmente, usa ela (prioridade)
             if ($request->has('profissao') && !empty($request->profissao)) {
                 $profissaoGerada = $request->profissao;
             }
@@ -177,10 +168,12 @@ class PrestadorController extends Controller
             $user = User::create($userData);
 
             // ==========================================
-            // SALVAR CATEGORIAS
+            // SALVAR CATEGORIAS - CORRIGIDO
             // ==========================================
             if (!empty($categoriasIds)) {
                 $insertData = [];
+                $validCategories = 0;
+
                 foreach ($categoriasIds as $categoriaId) {
                     $categoria = Categoria::find($categoriaId);
                     if ($categoria) {
@@ -190,29 +183,40 @@ class PrestadorController extends Controller
                             'created_at' => now(),
                             'updated_at' => now(),
                         ];
+                        $validCategories++;
+                    } else {
+                        Log::warning("⚠️ Categoria ID {$categoriaId} não encontrada para prestador {$user->id}");
                     }
                 }
+
                 if (!empty($insertData)) {
                     DB::table('prestador_categorias')->insert($insertData);
+                    Log::info("✅ Categorias salvas para prestador {$user->id}: {$validCategories} de " . count($categoriasIds));
+                } else {
+                    Log::error("❌ Nenhuma categoria válida para salvar para prestador {$user->id}");
                 }
-                Log::info("✅ Categorias salvas para prestador {$user->id}: " . count($insertData) . " de " . count($categoriasIds));
             } else {
-                Log::warning("⚠️ Nenhuma categoria para salvar para prestador {$user->id}");
+                Log::warning("⚠️ Nenhuma categoria fornecida para prestador {$user->id}");
             }
 
             // ==========================================
-            // SALVAR DISPONIBILIDADE
+            // SALVAR DISPONIBILIDADE - CORRIGIDO
             // ==========================================
             if (!empty($disponibilidadeData)) {
-                PrestadorDisponibilidade::updateOrCreate(
-                    ['prestador_id' => $user->id],
-                    [
-                        'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
-                        'horarios_padrao' => $disponibilidadeData,
-                        'intervalos_padrao' => [],
-                        'ativo' => true,
-                    ]
-                );
+                try {
+                    PrestadorDisponibilidade::updateOrCreate(
+                        ['prestador_id' => $user->id],
+                        [
+                            'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
+                            'horarios_padrao' => $disponibilidadeData,
+                            'intervalos_padrao' => [],
+                            'ativo' => true,
+                        ]
+                    );
+                    Log::info("✅ Disponibilidade salva para prestador {$user->id}");
+                } catch (\Exception $e) {
+                    Log::error("❌ Erro ao salvar disponibilidade: " . $e->getMessage());
+                }
             }
 
             // ==========================================
@@ -245,6 +249,8 @@ class PrestadorController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('Erro ao registar prestador: ' . $e->getMessage());
+            Log::error('Stack trace: ' . $e->getTraceAsString());
+
             return response()->json([
                 'success' => false,
                 'error' => 'Erro ao registar prestador: ' . $e->getMessage()
@@ -253,16 +259,20 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 2. SERVIÇOS DO PRESTADOR
+    // 2. SERVIÇOS DO PRESTADOR - CORRIGIDO
     // ==========================================
 
-    /**
-     * Listar serviços do prestador
-     * GET /api/prestador/servicos
-     */
     public function servicos(Request $request)
     {
         $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Usuário não autenticado'
+            ], 401);
+        }
+
         $cacheKey = "prestador_servicos_{$user->id}";
 
         $servicos = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
@@ -294,10 +304,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Criar novo serviço
-     * POST /api/prestador/servicos
-     */
     public function createServico(Request $request)
     {
         $user = $request->user();
@@ -346,10 +352,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Atualizar serviço
-     * PUT /api/prestador/servicos/{id}
-     */
     public function updateServico(Request $request, $id)
     {
         $user = $request->user();
@@ -406,10 +408,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Deletar serviço
-     * DELETE /api/prestador/servicos/{id}
-     */
     public function deleteServico(Request $request, $id)
     {
         $user = $request->user();
@@ -431,10 +429,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Ativar/Desativar serviço
-     * PUT /api/prestador/servicos/{id}/toggle
-     */
     public function toggleServico(Request $request, $id)
     {
         $user = $request->user();
@@ -460,298 +454,195 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 3. AGENDA DO PRESTADOR
+    // 3. CATEGORIAS DO PRESTADOR - CORRIGIDO (CRÍTICO)
     // ==========================================
 
     /**
-     * Listar agenda do prestador
-     * GET /api/prestador/agenda
-     */
-    public function agenda(Request $request)
-    {
-        return response()->json([
-            'success' => true,
-            'data' => []
-        ]);
-    }
-
-    /**
-     * Bloquear horário na agenda
-     * POST /api/prestador/agenda/bloquear
-     */
-    public function bloquearHorario(Request $request)
-    {
-        $validator = Validator::make($request->all(), [
-            'data' => 'required|date',
-            'horario_inicio' => 'required|date_format:H:i',
-            'horario_fim' => 'required|date_format:H:i|after:horario_inicio',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'error' => $validator->errors()->first()
-            ], 422);
-        }
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Horário bloqueado com sucesso'
-        ]);
-    }
-
-    /**
-     * Desbloquear horário
-     * DELETE /api/prestador/agenda/{id}
-     */
-    public function desbloquearHorario($id)
-    {
-        return response()->json([
-            'success' => true,
-            'message' => 'Horário desbloqueado'
-        ]);
-    }
-
-    // ==========================================
-    // 4. SOLICITAÇÕES/PEDIDOS
-    // ==========================================
-
-    /**
-     * Listar solicitações de serviço
-     * GET /api/prestador/solicitacoes
-     */
-    public function solicitacoes(Request $request)
-    {
-        $user = $request->user();
-        $status = $request->query('status');
-        $page = $request->query('page', 1);
-        $cacheKey = "prestador_solicitacoes_{$user->id}_" . ($status ?? 'all') . "_{$page}";
-
-        $pedidos = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $status) {
-            $query = Pedido::where('prestador_id', $user->id)
-                ->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco']);
-
-            if ($status) {
-                $query->where('status', $status);
-            }
-
-            return $query->orderBy('created_at', 'desc')->paginate(20);
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $pedidos
-        ]);
-    }
-
-    /**
-     * Aceitar solicitação
-     * PUT /api/prestador/solicitacoes/{id}/aceitar
-     */
-    public function aceitarSolicitacao(Request $request, $id)
-    {
-        $user = $request->user();
-        $pedido = Pedido::where('prestador_id', $user->id)->find($id);
-
-        if (!$pedido) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
-        }
-
-        if ($pedido->status !== 'pendente') {
-            return response()->json([
-                'success' => false,
-                'error' => 'Este pedido não pode ser aceito'
-            ], 422);
-        }
-
-        $pedido->status = 'aceito';
-        $pedido->save();
-
-        // ✅ NOTIFICAÇÃO: Pedido aceito para o CLIENTE
-        $cliente = $pedido->cliente;
-        if ($cliente) {
-            $cliente->notify(new DynamicNotification('pedido_confirmado', [
-                'pedido_numero' => $pedido->numero ?? $pedido->id,
-                'prestador_nome' => $user->nome,
-                'pedido_id' => $pedido->id,
-            ]));
-            Log::info("Notificação 'pedido_confirmado' enviada para o cliente ID: {$cliente->id}");
-        }
-
-        $this->clearPrestadorCache($user->id);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Pedido aceito com sucesso',
-            'data' => $pedido
-        ]);
-    }
-
-    /**
-     * Recusar solicitação
-     * PUT /api/prestador/solicitacoes/{id}/recusar
-     */
-    public function recusarSolicitacao(Request $request, $id)
-    {
-        $user = $request->user();
-        $pedido = Pedido::where('prestador_id', $user->id)->find($id);
-
-        if (!$pedido) {
-            return response()->json([
-                'success' => false,
-                'error' => 'Pedido não encontrado'
-            ], 404);
-        }
-
-        if ($pedido->status !== 'pendente') {
-            return response()->json([
-                'success' => false,
-                'error' => 'Este pedido não pode ser recusado'
-            ], 422);
-        }
-
-        $pedido->status = 'cancelado';
-        $pedido->save();
-
-        // ✅ NOTIFICAÇÃO: Pedido recusado/cancelado para o CLIENTE
-        $cliente = $pedido->cliente;
-        if ($cliente) {
-            $cliente->notify(new DynamicNotification('pedido_cancelado', [
-                'pedido_numero' => $pedido->numero ?? $pedido->id,
-                'pedido_id' => $pedido->id,
-            ]));
-            Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
-        }
-
-        $this->clearPrestadorCache($user->id);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Pedido recusado'
-        ]);
-    }
-
-    // ==========================================
-    // 5. CATEGORIAS DO PRESTADOR
-    // ==========================================
-
-    /**
-     * Listar categorias que o prestador atende
+     * Listar categorias que o prestador atende - CORRIGIDO
      * GET /api/prestador/categorias
      */
     public function minhasCategorias(Request $request)
     {
         $user = $request->user();
+
+        if (!$user) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Usuário não autenticado'
+            ], 401);
+        }
+
         $cacheKey = "prestador_categorias_{$user->id}";
 
         $categorias = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
-            return $user->categorias()
-                ->select(['categorias.id', 'categorias.nome', 'categorias.slug', 'categorias.icone', 'categorias.cor'])
-                ->get()
-                ->map(function ($cat) {
-                    return [
-                        'id' => (int) $cat->id,
-                        'nome' => (string) $cat->nome,
-                        'slug' => (string) $cat->slug,
-                        'icone' => (string) ($cat->icone ?? 'category'),
-                        'cor' => (string) ($cat->cor ?? 'primary'),
-                    ];
-                })
-                ->toArray();
+            // 🔥 CORREÇÃO: Usar DB::table diretamente para garantir que pega os dados
+            $categoriasFromDb = DB::table('prestador_categorias')
+                ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
+                ->where('prestador_categorias.user_id', $user->id)
+                ->select([
+                    'categorias.id',
+                    'categorias.nome',
+                    'categorias.slug',
+                    'categorias.icone',
+                    'categorias.cor',
+                    'categorias.descricao'
+                ])
+                ->get();
+
+            Log::info("📌 Categorias encontradas para prestador {$user->id}: " . $categoriasFromDb->count());
+
+            if ($categoriasFromDb->isEmpty()) {
+                // TENTAR RECUPERAR DO PREFERENCES COMO FALLBACK
+                $userModel = User::find($user->id);
+                if ($userModel && $userModel->preferences) {
+                    $preferences = is_array($userModel->preferences)
+                        ? $userModel->preferences
+                        : json_decode($userModel->preferences, true);
+
+                    if (isset($preferences['categorias']) && is_array($preferences['categorias'])) {
+                        Log::info("🔄 Recuperando categorias do preferences para user {$user->id}: " . count($preferences['categorias']));
+
+                        $categoriasFromPreferences = DB::table('categorias')
+                            ->whereIn('id', $preferences['categorias'])
+                            ->select(['id', 'nome', 'slug', 'icone', 'cor', 'descricao'])
+                            ->get();
+
+                        if ($categoriasFromPreferences->isNotEmpty()) {
+                            // SALVAR NOVAMENTE NA TABELA prestador_categorias
+                            foreach ($categoriasFromPreferences as $cat) {
+                                DB::table('prestador_categorias')->updateOrInsert(
+                                    ['user_id' => $user->id, 'categoria_id' => $cat->id],
+                                    ['created_at' => now(), 'updated_at' => now()]
+                                );
+                            }
+                            Log::info("✅ Categorias recuperadas do preferences e salvas na tabela para user {$user->id}");
+                            return $categoriasFromPreferences->map(function ($cat) {
+                                return [
+                                    'id' => (int) $cat->id,
+                                    'nome' => (string) $cat->nome,
+                                    'slug' => (string) ($cat->slug ?? ''),
+                                    'icone' => (string) ($cat->icone ?? 'category'),
+                                    'cor' => (string) ($cat->cor ?? 'primary'),
+                                    'descricao' => $cat->descricao,
+                                ];
+                            })->toArray();
+                        }
+                    }
+                }
+            }
+
+            return $categoriasFromDb->map(function ($cat) {
+                return [
+                    'id' => (int) $cat->id,
+                    'nome' => (string) $cat->nome,
+                    'slug' => (string) ($cat->slug ?? ''),
+                    'icone' => (string) ($cat->icone ?? 'category'),
+                    'cor' => (string) ($cat->cor ?? 'primary'),
+                    'descricao' => $cat->descricao ?? null,
+                ];
+            })->toArray();
         });
 
         return response()->json([
             'success' => true,
-            'data' => $categorias
+            'data' => $categorias,
+            'meta' => [
+                'total' => count($categorias),
+                'user_id' => $user->id
+            ]
         ]);
     }
 
-    /**
-     * Adicionar categoria
-     * POST /api/prestador/categorias/{categoriaId}
-     */
     public function addCategoria(Request $request, $categoriaId)
     {
         $user = $request->user();
-        $user->categorias()->attach($categoriaId);
-        $this->clearPrestadorCache($user->id);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Categoria adicionada'
-        ]);
+        try {
+            // Verificar se categoria existe
+            $categoria = Categoria::find($categoriaId);
+            if (!$categoria) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Categoria não encontrada'
+                ], 404);
+            }
+
+            // Adicionar à tabela prestador_categorias
+            DB::table('prestador_categorias')->updateOrInsert(
+                ['user_id' => $user->id, 'categoria_id' => $categoriaId],
+                ['created_at' => now(), 'updated_at' => now()]
+            );
+
+            // Atualizar preferences
+            $userModel = User::find($user->id);
+            $preferences = $userModel->preferences ? json_decode($userModel->preferences, true) : [];
+            if (!isset($preferences['categorias'])) {
+                $preferences['categorias'] = [];
+            }
+            if (!in_array($categoriaId, $preferences['categorias'])) {
+                $preferences['categorias'][] = $categoriaId;
+                $userModel->preferences = json_encode($preferences);
+                $userModel->save();
+            }
+
+            $this->clearPrestadorCache($user->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Categoria adicionada com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao adicionar categoria: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao adicionar categoria'
+            ], 500);
+        }
     }
 
-    /**
-     * Remover categoria
-     * DELETE /api/prestador/categorias/{categoriaId}
-     */
     public function removeCategoria(Request $request, $categoriaId)
     {
         $user = $request->user();
-        $user->categorias()->detach($categoriaId);
-        $this->clearPrestadorCache($user->id);
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Categoria removida'
-        ]);
+        try {
+            // Remover da tabela prestador_categorias
+            DB::table('prestador_categorias')
+                ->where('user_id', $user->id)
+                ->where('categoria_id', $categoriaId)
+                ->delete();
+
+            // Atualizar preferences
+            $userModel = User::find($user->id);
+            $preferences = $userModel->preferences ? json_decode($userModel->preferences, true) : [];
+            if (isset($preferences['categorias'])) {
+                $preferences['categorias'] = array_values(array_filter($preferences['categorias'], function ($id) use ($categoriaId) {
+                    return $id != $categoriaId;
+                }));
+                $userModel->preferences = json_encode($preferences);
+                $userModel->save();
+            }
+
+            $this->clearPrestadorCache($user->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Categoria removida com sucesso'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao remover categoria: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'error' => 'Erro ao remover categoria'
+            ], 500);
+        }
     }
 
     // ==========================================
-    // 6. ESTATÍSTICAS DO PRESTADOR
+    // 4. PERFIL DO PRESTADOR (público) - CORRIGIDO
     // ==========================================
 
     /**
-     * Estatísticas do prestador
-     * GET /api/prestador/stats
-     */
-    public function stats(Request $request)
-    {
-        $userId = $request->user()->id;
-        $cacheKey = "prestador_stats_{$userId}";
-
-        $stats = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId) {
-            $result = DB::table('pedidos')
-                ->where('prestador_id', $userId)
-                ->selectRaw("
-                    COUNT(CASE WHEN status = 'pendente' THEN 1 END) as pedidos_pendentes,
-                    COUNT(CASE WHEN status IN ('aceito', 'em_andamento') AND DATE(data) = CURDATE() THEN 1 END) as servicos_hoje,
-                    COALESCE(SUM(CASE WHEN status = 'concluido' AND MONTH(created_at) = MONTH(NOW()) THEN valor ELSE 0 END), 0) as ganhos_mes
-                ")
-                ->first();
-
-            $mediaAvaliacao = DB::table('avaliacoes')
-                ->where('prestador_id', $userId)
-                ->avg('nota');
-
-            return [
-                'pedidos_pendentes' => (int) ($result->pedidos_pendentes ?? 0),
-                'servicos_hoje' => (int) ($result->servicos_hoje ?? 0),
-                'avaliacao_media' => round($mediaAvaliacao ?? 0, 1),
-                'ganhos_mes' => (float) ($result->ganhos_mes ?? 0),
-            ];
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $stats
-        ]);
-    }
-
-    // ==========================================
-    // 7. PERFIL DO PRESTADOR (público)
-    // ==========================================
-
-    /**
-     * Listar prestadores (público)
-     * GET /api/prestadores
-     */
-    /**
-     * Listar prestadores (público)
+     * Listar prestadores (público) - CORRIGIDO
      * GET /api/prestadores
      */
     public function index(Request $request)
@@ -761,8 +652,8 @@ class PrestadorController extends Controller
 
             $prestadores = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($request) {
                 $query = DB::table('users')
-                    ->where('tipo', 'prestador')
-                    ->where('ativo', true)
+                    ->where('users.tipo', 'prestador')
+                    ->where('users.ativo', true)
                     ->select([
                         'users.id',
                         'users.nome',
@@ -778,7 +669,6 @@ class PrestadorController extends Controller
                         'users.preferences'
                     ]);
 
-                // ✅ FILTRO POR CATEGORIA - USANDO DB DIRETO (SEM whereHas)
                 if ($request->has('categoria')) {
                     $categoriaId = (int) $request->categoria;
                     $query->whereExists(function ($q) use ($categoriaId) {
@@ -789,7 +679,6 @@ class PrestadorController extends Controller
                     });
                 }
 
-                // ✅ FILTRO POR BUSCA
                 if ($request->has('busca') && !empty($request->busca)) {
                     $busca = '%' . addcslashes($request->busca, '%_') . '%';
                     $query->where('users.nome', 'like', $busca);
@@ -798,7 +687,6 @@ class PrestadorController extends Controller
                 $prestadores = $query->limit(50)->get();
                 $prestadorIds = $prestadores->pluck('id')->toArray();
 
-                // Buscar categorias em lote
                 $categoriasMap = [];
                 if (!empty($prestadorIds)) {
                     $categorias = DB::table('prestador_categorias')
@@ -853,8 +741,9 @@ class PrestadorController extends Controller
             ], 500);
         }
     }
+
     /**
-     * Detalhes do prestador (público)
+     * Detalhes do prestador (público) - CORRIGIDO
      * GET /api/prestadores/{id}
      */
     public function show($id)
@@ -886,14 +775,10 @@ class PrestadorController extends Controller
 
             $preferences = json_decode($prestador->preferences, true);
 
-            // Portfolio
             $portfolio = isset($preferences['portfolio']) && is_array($preferences['portfolio'])
                 ? array_map(fn($path) => asset('storage/' . $path), $preferences['portfolio'])
                 : [];
 
-            // ==========================================
-            // BUSCAR SERVIÇOS DO PRESTADOR
-            // ==========================================
             $servicos = DB::table('servicos')
                 ->where('prestador_id', $id)
                 ->where('ativo', true)
@@ -908,9 +793,6 @@ class PrestadorController extends Controller
                     'icone' => (string) ($s->icone ?? 'handyman'),
                 ])->toArray();
 
-            // ==========================================
-            // BUSCAR CATEGORIAS
-            // ==========================================
             $categorias = DB::table('prestador_categorias')
                 ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
                 ->where('prestador_categorias.user_id', $id)
@@ -923,9 +805,6 @@ class PrestadorController extends Controller
                     'cor' => (string) ($cat->cor ?? 'primary'),
                 ])->toArray();
 
-            // ==========================================
-            // BUSCAR AVALIAÇÕES (últimas 10)
-            // ==========================================
             $avaliacoes = DB::table('avaliacoes')
                 ->where('prestador_id', $id)
                 ->leftJoin('users as clientes', 'avaliacoes.cliente_id', '=', 'clientes.id')
@@ -980,10 +859,6 @@ class PrestadorController extends Controller
         return response()->json(['success' => true, 'data' => $dados]);
     }
 
-    /**
-     * Prestadores em destaque (público)
-     * GET /api/prestadores/destaque
-     */
     public function destaque()
     {
         try {
@@ -991,7 +866,7 @@ class PrestadorController extends Controller
                 ->where('ativo', true)
                 ->select('id', 'nome', 'foto', 'profissao', 'media_avaliacao', 'total_avaliacoes', 'verificado')
                 ->orderBy('media_avaliacao', 'desc')
-                ->limit(8)  // ← **LIMITE DE 8**
+                ->limit(8)
                 ->get();
 
             $result = $prestadores->map(function ($prestador) {
@@ -1021,10 +896,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Prestadores mais bem avaliados (público)
-     * GET /api/prestadores/top
-     */
     public function topAvaliados()
     {
         $prestadores = Cache::remember('prestadores_top', self::CACHE_MEDIUM, function () {
@@ -1074,18 +945,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Prestadores próximos (público)
-     * GET /api/prestadores/proximos
-     */
-    /**
-     * Prestadores próximos (público)
-     * GET /api/prestadores/proximos
-     */
-    /**
-     * Prestadores próximos (público)
-     * GET /api/prestadores/proximos
-     */
     public function proximos(Request $request)
     {
         $latitude = $request->query('latitude');
@@ -1150,9 +1009,6 @@ class PrestadorController extends Controller
             $portfolioMap = [];
 
             if (!empty($prestadorIds)) {
-                // ==========================================
-                // 1. BUSCAR CATEGORIAS
-                // ==========================================
                 $categorias = DB::table('prestador_categorias')
                     ->whereIn('user_id', $prestadorIds)
                     ->join('categorias', 'prestador_categorias.categoria_id', '=', 'categorias.id')
@@ -1168,9 +1024,6 @@ class PrestadorController extends Controller
                     ];
                 }
 
-                // ==========================================
-                // 2. BUSCAR SERVIÇOS
-                // ==========================================
                 $servicos = DB::table('servicos')
                     ->whereIn('prestador_id', $prestadorIds)
                     ->where('ativo', true)
@@ -1188,9 +1041,6 @@ class PrestadorController extends Controller
                     ];
                 }
 
-                // ==========================================
-                // 3. BUSCAR AVALIAÇÕES (últimas 3)
-                // ==========================================
                 $avaliacoes = DB::table('avaliacoes')
                     ->whereIn('prestador_id', $prestadorIds)
                     ->leftJoin('users as clientes', 'avaliacoes.cliente_id', '=', 'clientes.id')
@@ -1226,9 +1076,6 @@ class PrestadorController extends Controller
                     }
                 }
 
-                // ==========================================
-                // 4. BUSCAR PORTFOLIO
-                // ==========================================
                 foreach ($prestadores as $prestador) {
                     $preferences = json_decode($prestador->preferences, true);
                     if (isset($preferences['portfolio']) && is_array($preferences['portfolio'])) {
@@ -1241,9 +1088,6 @@ class PrestadorController extends Controller
                 }
             }
 
-            // ==========================================
-            // 5. MONTAR RESPOSTA COMPLETA
-            // ==========================================
             $resultado = [];
             foreach ($prestadores as $prestador) {
                 $distancia = $this->calcularDistancia(
@@ -1292,9 +1136,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Calcular distância entre dois pontos (Haversine formula)
-     */
     private function calcularDistancia($lat1, $lon1, $lat2, $lon2)
     {
         if (!$lat1 || !$lon1 || !$lat2 || !$lon2) {
@@ -1314,11 +1155,6 @@ class PrestadorController extends Controller
         return $earthRadius * $c;
     }
 
-
-    /**
-     * Listar categorias (público)
-     * GET /api/prestadores/categorias
-     */
     public function categorias()
     {
         $categorias = Cache::remember('prestador_categorias_publicas', self::CACHE_VERY_LONG, function () {
@@ -1347,10 +1183,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Avaliações do prestador (público)
-     * GET /api/prestadores/{id}/avaliacoes
-     */
     public function avaliacoes($id)
     {
         $page = request()->query('page', 1);
@@ -1371,13 +1203,203 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
+    // 5. SOLICITAÇÕES/PEDIDOS - CORRIGIDO
+    // ==========================================
+
+    public function solicitacoes(Request $request)
+    {
+        $user = $request->user();
+        $status = $request->query('status');
+        $page = $request->query('page', 1);
+        $cacheKey = "prestador_solicitacoes_{$user->id}_" . ($status ?? 'all') . "_{$page}";
+
+        $pedidos = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($user, $status) {
+            $query = Pedido::where('prestador_id', $user->id)
+                ->with(['cliente:id,nome,foto,telefone', 'servico:id,nome,preco']);
+
+            if ($status) {
+                $query->where('status', $status);
+            }
+
+            return $query->orderBy('created_at', 'desc')->paginate(20);
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $pedidos
+        ]);
+    }
+
+    public function aceitarSolicitacao(Request $request, $id)
+    {
+        $user = $request->user();
+        $pedido = Pedido::where('prestador_id', $user->id)->find($id);
+
+        if (!$pedido) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Pedido não encontrado'
+            ], 404);
+        }
+
+        if ($pedido->status !== 'pendente') {
+            return response()->json([
+                'success' => false,
+                'error' => 'Este pedido não pode ser aceito'
+            ], 422);
+        }
+
+        $pedido->status = 'aceito';
+        $pedido->save();
+
+        $cliente = $pedido->cliente;
+        if ($cliente) {
+            try {
+                $cliente->notify(new DynamicNotification('pedido_confirmado', [
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'prestador_nome' => $user->nome,
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'pedido_confirmado' enviada para o cliente ID: {$cliente->id}");
+            } catch (\Exception $e) {
+                Log::error("Erro ao enviar notificação: " . $e->getMessage());
+            }
+        }
+
+        $this->clearPrestadorCache($user->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Pedido aceito com sucesso',
+            'data' => $pedido
+        ]);
+    }
+
+    public function recusarSolicitacao(Request $request, $id)
+    {
+        $user = $request->user();
+        $pedido = Pedido::where('prestador_id', $user->id)->find($id);
+
+        if (!$pedido) {
+            return response()->json([
+                'success' => false,
+                'error' => 'Pedido não encontrado'
+            ], 404);
+        }
+
+        if ($pedido->status !== 'pendente') {
+            return response()->json([
+                'success' => false,
+                'error' => 'Este pedido não pode ser recusado'
+            ], 422);
+        }
+
+        $pedido->status = 'cancelado';
+        $pedido->save();
+
+        $cliente = $pedido->cliente;
+        if ($cliente) {
+            try {
+                $cliente->notify(new DynamicNotification('pedido_cancelado', [
+                    'pedido_numero' => $pedido->numero ?? $pedido->id,
+                    'pedido_id' => $pedido->id,
+                ]));
+                Log::info("Notificação 'pedido_cancelado' enviada para o cliente ID: {$cliente->id}");
+            } catch (\Exception $e) {
+                Log::error("Erro ao enviar notificação: " . $e->getMessage());
+            }
+        }
+
+        $this->clearPrestadorCache($user->id);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Pedido recusado'
+        ]);
+    }
+
+    // ==========================================
+    // 6. AGENDA DO PRESTADOR
+    // ==========================================
+
+    public function agenda(Request $request)
+    {
+        return response()->json([
+            'success' => true,
+            'data' => []
+        ]);
+    }
+
+    public function bloquearHorario(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'data' => 'required|date',
+            'horario_inicio' => 'required|date_format:H:i',
+            'horario_fim' => 'required|date_format:H:i|after:horario_inicio',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'error' => $validator->errors()->first()
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Horário bloqueado com sucesso'
+        ]);
+    }
+
+    public function desbloquearHorario($id)
+    {
+        return response()->json([
+            'success' => true,
+            'message' => 'Horário desbloqueado'
+        ]);
+    }
+
+    // ==========================================
+    // 7. ESTATÍSTICAS DO PRESTADOR - CORRIGIDO
+    // ==========================================
+
+    public function stats(Request $request)
+    {
+        $userId = $request->user()->id;
+        $cacheKey = "prestador_stats_{$userId}";
+
+        $stats = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($userId) {
+            $result = DB::table('pedidos')
+                ->where('prestador_id', $userId)
+                ->selectRaw("
+                    COUNT(CASE WHEN status = 'pendente' THEN 1 END) as pedidos_pendentes,
+                    COUNT(CASE WHEN status IN ('aceito', 'em_andamento') AND DATE(data) = CURDATE() THEN 1 END) as servicos_hoje,
+                    COALESCE(SUM(CASE WHEN status = 'concluido' AND MONTH(created_at) = MONTH(NOW()) THEN valor ELSE 0 END), 0) as ganhos_mes
+                ")
+                ->first();
+
+            $mediaAvaliacao = DB::table('avaliacoes')
+                ->where('prestador_id', $userId)
+                ->avg('nota');
+
+            return [
+                'pedidos_pendentes' => (int) ($result->pedidos_pendentes ?? 0),
+                'servicos_hoje' => (int) ($result->servicos_hoje ?? 0),
+                'avaliacao_media' => round($mediaAvaliacao ?? 0, 1),
+                'ganhos_mes' => (float) ($result->ganhos_mes ?? 0),
+            ];
+        });
+
+        return response()->json([
+            'success' => true,
+            'data' => $stats
+        ]);
+    }
+
+    // ==========================================
     // 8. FINANCEIRO DO PRESTADOR
     // ==========================================
 
-    /**
-     * Ganhos do prestador
-     * GET /api/prestador/ganhos
-     */
     public function ganhos(Request $request)
     {
         $userId = $request->user()->id;
@@ -1408,10 +1430,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Listar saques
-     * GET /api/prestador/saques
-     */
     public function saques(Request $request)
     {
         $user = $request->user();
@@ -1443,10 +1461,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Solicitar saque
-     * POST /api/prestador/saques
-     */
     public function solicitarSaque(Request $request)
     {
         $user = $request->user();
@@ -1510,10 +1524,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Histórico de saques
-     * GET /api/prestador/saques/historico
-     */
     public function historicoSaques(Request $request)
     {
         $user = $request->user();
@@ -1537,10 +1547,6 @@ class PrestadorController extends Controller
     // 9. PRÓXIMOS SERVIÇOS E AVALIAÇÕES RECENTES
     // ==========================================
 
-    /**
-     * Próximos serviços do prestador
-     * GET /api/prestador/proximos-servicos
-     */
     public function proximosServicos(Request $request)
     {
         $userId = $request->user()->id;
@@ -1587,10 +1593,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Avaliações recentes do prestador
-     * GET /api/prestador/avaliacoes/recentes
-     */
     public function avaliacoesRecentes(Request $request)
     {
         $userId = $request->user()->id;
@@ -1630,10 +1632,6 @@ class PrestadorController extends Controller
     // 10. INTERVALOS DO PRESTADOR
     // ==========================================
 
-    /**
-     * Listar intervalos do prestador
-     * GET /api/prestador/intervalos
-     */
     public function intervalos(Request $request)
     {
         $user = $request->user();
@@ -1663,10 +1661,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Criar intervalo
-     * POST /api/prestador/intervalos
-     */
     public function criarIntervalo(Request $request)
     {
         $user = $request->user();
@@ -1712,10 +1706,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Atualizar intervalo
-     * PUT /api/prestador/intervalos/{id}
-     */
     public function atualizarIntervalo(Request $request, $id)
     {
         $user = $request->user();
@@ -1768,10 +1758,6 @@ class PrestadorController extends Controller
         }
     }
 
-    /**
-     * Deletar intervalo
-     * DELETE /api/prestador/intervalos/{id}
-     */
     public function deletarIntervalo(Request $request, $id)
     {
         $user = $request->user();
@@ -1794,13 +1780,9 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 11. DISPONIBILIDADE DO PRESTADOR
+    // 11. DISPONIBILIDADE DO PRESTADOR - CORRIGIDO
     // ==========================================
 
-    /**
-     * Obter configurações de disponibilidade
-     * GET /api/prestador/disponibilidade
-     */
     public function getDisponibilidade(Request $request)
     {
         $user = $request->user();
@@ -1810,6 +1792,7 @@ class PrestadorController extends Controller
             $disponibilidade = PrestadorDisponibilidade::where('prestador_id', $user->id)->first();
 
             if (!$disponibilidade) {
+                Log::info("Criando disponibilidade padrão para prestador {$user->id}");
                 $disponibilidade = PrestadorDisponibilidade::create([
                     'prestador_id' => $user->id,
                     'configuracoes' => PrestadorDisponibilidade::getDefaultConfiguracoes(),
@@ -1828,10 +1811,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Atualizar configurações de disponibilidade
-     * PUT /api/prestador/disponibilidade
-     */
     public function updateDisponibilidade(Request $request)
     {
         $user = $request->user();
@@ -1888,12 +1867,9 @@ class PrestadorController extends Controller
     }
 
     // ==========================================
-    // 12. MÉTODOS AUXILIARES
+    // 12. MÉTODOS AUXILIARES - CORRIGIDO
     // ==========================================
 
-    /**
-     * Limpar todos os caches do prestador
-     */
     private function clearPrestadorCache($userId)
     {
         $keys = [
@@ -1908,6 +1884,7 @@ class PrestadorController extends Controller
             "prestador_proximos_servicos_{$userId}_10",
             "prestador_avaliacoes_recentes_{$userId}_5",
             "prestador_avaliacoes_recentes_{$userId}_10",
+            "prestador_detalhes_{$userId}",
         ];
 
         foreach ($keys as $key) {
@@ -1929,12 +1906,11 @@ class PrestadorController extends Controller
         Cache::forget('prestadores_destaque');
         Cache::forget('prestadores_top');
         Cache::forget('prestador_categorias_publicas');
+
+        // Limpar caches de listas de prestadores
+        Cache::forget("prestador_detalhes_{$userId}");
     }
 
-    /**
-     * Limpar cache do prestador (endpoint público)
-     * POST /api/prestador/clear-cache
-     */
     public function clearCache(Request $request)
     {
         $userId = $request->user()->id;
@@ -1946,10 +1922,6 @@ class PrestadorController extends Controller
         ]);
     }
 
-    /**
-     * Endpoint para verificar saúde do sistema
-     * GET /api/prestador/health
-     */
     public function health()
     {
         return response()->json([
