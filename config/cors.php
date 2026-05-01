@@ -3,7 +3,7 @@
 return [
     'paths' => ['api/*', '*'],
     'allowed_methods' => ['*'],
-    'allowed_origins' => ['https://estouaqui-app.onrender.com','http://localhost:9000'],
+    'allowed_origins' => ['https://estouaqui-app.onrender.com'],
     'allowed_origins_patterns' => [],
     'allowed_headers' => ['*'],
     'exposed_headers' => [],
