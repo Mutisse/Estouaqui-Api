@@ -48,36 +48,56 @@ class UsuarioController extends Controller
     public function me(Request $request)
     {
         $user = $request->user();
-        $cacheKey = "user_profile_{$user->id}";
 
-        $data = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
-            // ✅ Buscar preferências
-            $preferences = $user->preferences;
-            if (is_string($preferences)) {
-                $preferences = json_decode($preferences, true);
-            }
+        // ✅ Buscar preferências
+        $preferences = $user->preferences;
+        if (is_string($preferences)) {
+            $preferences = json_decode($preferences, true);
+        }
 
-            // ✅ CORRIGIDO: Buscar portfolio e gerar URLs
-            $portfolio = [];
-            if (!empty($preferences['portfolio']) && is_array($preferences['portfolio'])) {
-                foreach ($preferences['portfolio'] as $path) {
-                    if (filter_var($path, FILTER_VALIDATE_URL)) {
-                        $portfolio[] = $path;
-                    } else {
-                        // Remove barras no início e garante o caminho correto
-                        $cleanPath = ltrim($path, '/');
-                        $portfolio[] = asset('storage/' . $cleanPath);
-                    }
+        // ✅ FUNÇÃO CORRETA PARA DETECTAR URL EXTERNA
+        $isExternal = function ($url) {
+            if (empty($url)) return false;
+            return str_starts_with($url, 'http://') || str_starts_with($url, 'https://');
+        };
+
+        // ✅ PROCESSAR PORTFOLIO
+        $portfolio = [];
+        if (!empty($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+            foreach ($preferences['portfolio'] as $path) {
+                if ($isExternal($path)) {
+                    $portfolio[] = $path;
+                } else {
+                    $portfolio[] = asset('storage/' . ltrim($path, '/'));
                 }
             }
+        }
 
-            return [
+        // ✅ PROCESSAR FOTO
+        $fotoUrl = null;
+        if ($user->foto) {
+            if ($isExternal($user->foto)) {
+                $fotoUrl = $user->foto;
+            } else {
+                $fotoUrl = asset('storage/' . ltrim($user->foto, '/'));
+            }
+        }
+
+        // ✅ RAIO (prioridade: coluna raio > preferences.raio > padrão 10)
+        $raio = $user->raio ?? 10;
+        if (isset($preferences['raio'])) {
+            $raio = (int) $preferences['raio'];
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
                 'id' => $user->id,
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
                 'endereco' => $user->endereco,
-                'foto' => $user->foto ? (filter_var($user->foto, FILTER_VALIDATE_URL) ? $user->foto : asset('storage/' . ltrim($user->foto, '/'))) : null,
+                'foto' => $fotoUrl,
                 'tipo' => $user->tipo,
                 'email_verified_at' => $user->email_verified_at,
                 'created_at' => $user->created_at,
@@ -87,17 +107,12 @@ class UsuarioController extends Controller
                 'total_avaliacoes' => (int) ($user->total_avaliacoes ?? 0),
                 'verificado' => (bool) ($user->verificado ?? false),
                 'ativo' => (bool) ($user->ativo ?? true),
+                'raio' => $raio,  // ✅ ADICIONADO!
                 'preferences' => $preferences,
                 'portfolio' => $portfolio,
-            ];
-        });
-
-        return response()->json([
-            'success' => true,
-            'data' => $data
+            ]
         ]);
     }
-
     /**
      * Atualizar perfil do usuário autenticado - LIMPAR CACHE
      * PUT /api/me

@@ -446,7 +446,7 @@ class PrestadorController extends Controller
                 $query = DB::table('users')
                     ->where('users.tipo', 'prestador')
                     ->where('users.ativo', true)
-                    ->select(['users.id', 'users.nome', 'users.email', 'users.telefone', 'users.foto', 'users.profissao', 'users.sobre', 'users.media_avaliacao', 'users.total_avaliacoes', 'users.verificado', 'users.ativo', 'users.preferences']);
+                    ->select(['users.id', 'users.nome', 'users.email', 'users.telefone', 'users.foto', 'users.profissao', 'users.sobre', 'users.media_avaliacao', 'users.total_avaliacoes', 'users.verificado', 'users.ativo', 'users.preferences', 'users.latitude', 'users.longitude', 'users.raio']);
 
                 if ($request->has('categoria')) {
                     $categoriaId = (int) $request->categoria;
@@ -466,19 +466,44 @@ class PrestadorController extends Controller
                 $prestadorIds = $prestadores->pluck('id')->toArray();
                 $categoriasMap = $this->buscarCategoriasEmLote($prestadorIds);
 
+                // ✅ FUNÇÃO PARA DETECTAR URL EXTERNA
+                $isExternal = function ($url) {
+                    if (empty($url)) return false;
+                    return str_starts_with($url, 'http://') || str_starts_with($url, 'https://');
+                };
+
                 $resultado = [];
                 foreach ($prestadores as $prestador) {
                     $preferences = json_decode($prestador->preferences, true);
-                    $portfolio = isset($preferences['portfolio']) && is_array($preferences['portfolio'])
-                        ? array_map(fn($path) => asset('storage/' . $path), array_slice($preferences['portfolio'], 0, 3))
-                        : [];
+
+                    // ✅ PROCESSAR FOTO CORRETAMENTE
+                    $fotoUrl = null;
+                    if ($prestador->foto) {
+                        if ($isExternal($prestador->foto)) {
+                            $fotoUrl = $prestador->foto;
+                        } else {
+                            $fotoUrl = asset('storage/' . ltrim($prestador->foto, '/'));
+                        }
+                    }
+
+                    // ✅ PROCESSAR PORTFOLIO CORRETAMENTE
+                    $portfolio = [];
+                    if (isset($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+                        foreach ($preferences['portfolio'] as $path) {
+                            if ($isExternal($path)) {
+                                $portfolio[] = $path;
+                            } else {
+                                $portfolio[] = asset('storage/' . ltrim($path, '/'));
+                            }
+                        }
+                    }
 
                     $resultado[] = [
                         'id' => (int) $prestador->id,
                         'nome' => (string) ($prestador->nome ?? ''),
                         'email' => (string) ($prestador->email ?? ''),
                         'telefone' => (string) ($prestador->telefone ?? ''),
-                        'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                        'foto' => $fotoUrl,
                         'profissao' => (string) ($prestador->profissao ?? ''),
                         'sobre' => (string) ($prestador->sobre ?? ''),
                         'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
@@ -487,6 +512,9 @@ class PrestadorController extends Controller
                         'disponivel' => (bool) ($prestador->ativo ?? true),
                         'portfolio' => $portfolio,
                         'categorias' => $categoriasMap[$prestador->id] ?? [],
+                        'raio' => $prestador->raio ?? 10,
+                        'latitude' => $prestador->latitude,
+                        'longitude' => $prestador->longitude,
                     ];
                 }
                 return $resultado;
@@ -497,39 +525,90 @@ class PrestadorController extends Controller
             return response()->json(['success' => false, 'error' => 'Erro ao carregar prestadores'], 500);
         }
     }
-
     public function show($id)
     {
-        $cacheKey = "prestador_detalhes_{$id}";
-        $dados = Cache::remember($cacheKey, self::CACHE_MEDIUM, function () use ($id) {
-            $prestador = DB::table('users')
-                ->where('tipo', 'prestador')->where('id', $id)
-                ->select(['id', 'nome', 'email', 'telefone', 'foto', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'verificado', 'ativo', 'created_at', 'preferences'])->first();
-            if (!$prestador) return null;
-            $preferences = json_decode($prestador->preferences, true) ?? [];
-            return [
+        $prestador = DB::table('users')
+            ->where('tipo', 'prestador')
+            ->where('id', $id)
+            ->first();
+
+        if (!$prestador) {
+            return response()->json(['success' => false, 'message' => 'Prestador não encontrado'], 404);
+        }
+
+        // Decodificar preferences
+        $preferencesRaw = $prestador->preferences;
+        $preferences = json_decode($preferencesRaw, true);
+
+        if (is_string($preferences)) {
+            $preferences = json_decode($preferences, true);
+        }
+
+        if (!is_array($preferences)) {
+            $preferences = [];
+        }
+
+        // ✅ BUSCAR CATEGORIAS DA TABELA prestador_categorias
+        $categoriasFromDb = $this->getCategoriasPrestador($id);
+
+        // ✅ SE NÃO TIVER NA TABELA, BUSCAR DO PREFERENCES
+        $categorias = $categoriasFromDb;
+        if (empty($categorias) && isset($preferences['categorias']) && is_array($preferences['categorias'])) {
+            $categoriasIds = $preferences['categorias'];
+            $categorias = DB::table('categorias')
+                ->whereIn('id', $categoriasIds)
+                ->select(['id', 'nome', 'icone', 'cor'])
+                ->get()
+                ->map(fn($cat) => [
+                    'id' => (int) $cat->id,
+                    'nome' => (string) $cat->nome,
+                    'icone' => (string) ($cat->icone ?? 'category'),
+                    'cor' => (string) ($cat->cor ?? 'primary'),
+                ])
+                ->toArray();
+        }
+
+        // Processar portfolio
+        $portfolio = [];
+        if (isset($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+            foreach ($preferences['portfolio'] as $path) {
+                $portfolio[] = asset('storage/' . ltrim($path, '/'));
+            }
+        }
+
+        $raio = $prestador->raio ?? 10;
+        if (isset($preferences['raio'])) {
+            $raio = (int) $preferences['raio'];
+        }
+
+        // Processar foto
+        $fotoUrl = $prestador->foto;
+        if ($fotoUrl && !str_starts_with($fotoUrl, 'http')) {
+            $fotoUrl = asset('storage/' . ltrim($fotoUrl, '/'));
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => [
                 'id' => (int) $prestador->id,
                 'nome' => (string) $prestador->nome,
                 'email' => (string) $prestador->email,
                 'telefone' => (string) $prestador->telefone,
-                'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                'foto' => $fotoUrl,
                 'profissao' => $prestador->profissao,
                 'sobre' => $prestador->sobre,
                 'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
                 'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
                 'verificado' => (bool) ($prestador->verificado ?? false),
                 'disponivel' => (bool) ($prestador->ativo ?? true),
-                'categorias' => $this->getCategoriasPrestador($id),
-                'servicos' => $this->getServicosPrestador($id),
-                'avaliacoes' => $this->getUltimasAvaliacoes($id),
-                'portfolio' => $this->getPortfolioUrls($preferences),
-                'created_at' => $prestador->created_at,
-            ];
-        });
-        if (!$dados) return response()->json(['success' => false, 'message' => 'Prestador não encontrado'], 404);
-        return response()->json(['success' => true, 'data' => $dados]);
+                'portfolio' => $portfolio,
+                'raio' => $raio,
+                'categorias' => $categorias,  // ✅ AGORA VEM DO PREFERENCES SE NÃO TIVER NA TABELA
+                'servicos' => [],
+                'avaliacoes' => [],
+            ]
+        ]);
     }
-
     public function destaque()
     {
         $prestadores = Cache::remember('prestadores_destaque', self::CACHE_MEDIUM, function () {
@@ -587,20 +666,40 @@ class PrestadorController extends Controller
         $prestadores = Cache::remember($cacheKey, self::CACHE_SHORT, function () use ($latitude, $longitude, $radius, $categoria, $busca, $limit) {
             $latRange = $radius / 111.045;
             $lonRange = $radius / (111.045 * cos(deg2rad($latitude)));
+
             $query = DB::table('users')
-                ->where('users.tipo', 'prestador')->where('users.ativo', true)
-                ->whereNotNull('users.latitude')->whereNotNull('users.longitude')
+                ->where('users.tipo', 'prestador')
+                ->where('users.ativo', true)
+                ->whereNotNull('users.latitude')
+                ->whereNotNull('users.longitude')
                 ->whereBetween('users.latitude', [$latitude - $latRange, $latitude + $latRange])
                 ->whereBetween('users.longitude', [$longitude - $lonRange, $longitude + $lonRange])
-                ->select(['users.id', 'users.nome', 'users.email', 'users.telefone', 'users.foto', 'users.profissao', 'users.sobre', 'users.media_avaliacao', 'users.total_avaliacoes', 'users.verificado', 'users.ativo as disponivel', 'users.latitude', 'users.longitude', 'users.preferences']);
+                ->select([
+                    'users.id',
+                    'users.nome',
+                    'users.email',
+                    'users.telefone',
+                    'users.foto',
+                    'users.profissao',
+                    'users.sobre',
+                    'users.media_avaliacao',
+                    'users.total_avaliacoes',
+                    'users.verificado',
+                    'users.ativo as disponivel',
+                    'users.latitude',
+                    'users.longitude',
+                    'users.preferences'
+                ]);
 
             if ($categoria) {
                 $query->whereExists(function ($q) use ($categoria) {
-                    $q->select(DB::raw(1))->from('prestador_categorias')
+                    $q->select(DB::raw(1))
+                        ->from('prestador_categorias')
                         ->whereColumn('prestador_categorias.user_id', 'users.id')
                         ->where('prestador_categorias.categoria_id', $categoria);
                 });
             }
+
             if ($busca) {
                 $buscaTermo = '%' . addcslashes($busca, '%_') . '%';
                 $query->where('users.nome', 'like', $buscaTermo);
@@ -609,17 +708,50 @@ class PrestadorController extends Controller
             $prestadores = $query->limit($limit)->get();
             if ($prestadores->isEmpty()) return [];
 
+            // ✅ FUNÇÃO PARA DETECTAR URL EXTERNA
+            $isExternal = function ($url) {
+                if (empty($url)) return false;
+                return str_starts_with($url, 'http://') || str_starts_with($url, 'https://');
+            };
+
             $resultado = [];
             foreach ($prestadores as $prestador) {
-                $distancia = $this->calcularDistancia((float)$latitude, (float)$longitude, (float)$prestador->latitude, (float)$prestador->longitude);
+                $distancia = $this->calcularDistancia(
+                    (float)$latitude,
+                    (float)$longitude,
+                    (float)$prestador->latitude,
+                    (float)$prestador->longitude
+                );
+
                 if ($distancia <= $radius) {
                     $preferences = json_decode($prestador->preferences, true) ?? [];
-                    $portfolio = isset($preferences['portfolio']) && is_array($preferences['portfolio'])
-                        ? array_map(fn($path) => asset('storage/' . $path), array_slice($preferences['portfolio'], 0, 3)) : [];
+
+                    // ✅ PROCESSAR FOTO CORRETAMENTE
+                    $fotoUrl = null;
+                    if ($prestador->foto) {
+                        if ($isExternal($prestador->foto)) {
+                            $fotoUrl = $prestador->foto;
+                        } else {
+                            $fotoUrl = asset('storage/' . ltrim($prestador->foto, '/'));
+                        }
+                    }
+
+                    // ✅ PROCESSAR PORTFOLIO CORRETAMENTE
+                    $portfolio = [];
+                    if (!empty($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+                        foreach ($preferences['portfolio'] as $path) {
+                            if ($isExternal($path)) {
+                                $portfolio[] = $path;
+                            } else {
+                                $portfolio[] = asset('storage/' . ltrim($path, '/'));
+                            }
+                        }
+                    }
+
                     $resultado[] = [
                         'id' => (int) $prestador->id,
                         'nome' => (string) $prestador->nome,
-                        'foto' => $prestador->foto ? asset('storage/' . $prestador->foto) : null,
+                        'foto' => $fotoUrl,
                         'profissao' => (string) ($prestador->profissao ?? 'Prestador de Serviços'),
                         'media_avaliacao' => (float) ($prestador->media_avaliacao ?? 0),
                         'total_avaliacoes' => (int) ($prestador->total_avaliacoes ?? 0),
@@ -628,12 +760,19 @@ class PrestadorController extends Controller
                         'distancia' => round($distancia, 2),
                         'portfolio' => $portfolio,
                         'categorias' => [],
+                        'latitude' => $prestador->latitude ? (float) $prestador->latitude : null,
+                        'longitude' => $prestador->longitude ? (float) $prestador->longitude : null,
                     ];
                 }
             }
             return array_values($resultado);
         });
-        return response()->json(['success' => true, 'data' => $prestadores, 'meta' => ['count' => count($prestadores), 'radius' => (float) $radius]]);
+
+        return response()->json([
+            'success' => true,
+            'data' => $prestadores,
+            'meta' => ['count' => count($prestadores), 'radius' => (float) $radius]
+        ]);
     }
 
     public function categorias()
@@ -1329,13 +1468,24 @@ class PrestadorController extends Controller
         return $map;
     }
 
+    /**
+     * Get portfolio URLs - CORRIGIDO
+     */
     private function getPortfolioUrls(array $preferences): array
     {
         if (empty($preferences['portfolio'])) return [];
-        return array_map(
-            fn($path) => asset('storage/' . $path),
-            array_slice($preferences['portfolio'], 0, 6)
-        );
+
+        $isExternal = function ($url) {
+            if (empty($url)) return false;
+            return str_starts_with($url, 'http://') || str_starts_with($url, 'https://');
+        };
+
+        return array_map(function ($path) use ($isExternal) {
+            if ($isExternal($path)) {
+                return $path;  // ✅ URL externa: mantém como está
+            }
+            return asset('storage/' . ltrim($path, '/'));  // ✅ Local: adiciona /storage/
+        }, array_slice($preferences['portfolio'], 0, 6));
     }
 
     private function getServicosPrestador(int $prestadorId): array
