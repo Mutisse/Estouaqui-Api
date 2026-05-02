@@ -341,7 +341,7 @@ class PrestadorController extends Controller
                 $preferences = is_array($userModel->preferences) ? $userModel->preferences : json_decode($userModel->preferences, true);
                 if (!empty($preferences['categorias'])) {
                     // Remover categorias inválidas (que não existem no banco)
-                    $categoriasValidas = array_filter($preferences['categorias'], function($cat) {
+                    $categoriasValidas = array_filter($preferences['categorias'], function ($cat) {
                         return is_numeric($cat) && Categoria::where('id', $cat)->exists();
                     });
 
@@ -1197,11 +1197,10 @@ class PrestadorController extends Controller
         $categoriasData = is_string($categoriasInput) ? json_decode($categoriasInput, true) : $categoriasInput;
         if (!is_array($categoriasData)) return [];
         if (isset($categoriasData[0]['value'])) {
-            return array_column($categoriasData, 'value');
+            return array_column($categoriasData, 'value');  // ✅ Extrai os IDs do formato [{value: 3}, {value: 5}]
         }
         return $categoriasData;
     }
-
     private function gerarProfissao(array $categoriasIds, ?string $profissaoManual): string
     {
         if (!empty($profissaoManual)) return $profissaoManual;

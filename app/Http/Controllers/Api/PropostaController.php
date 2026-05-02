@@ -372,10 +372,10 @@ class PropostaController extends Controller
 
         // Parâmetros de filtro
         $categoriaId = $request->query('categoria_id');
-        $raioKm = $request->query('raio_km', 10);
+        $raioKm = (float) $request->query('raio_km', 10);
         $ordenarPor = $request->query('ordenar_por', 'distancia');
-        $perPage = $request->query('per_page', 20);
-        $page = $request->query('page', 1);
+        $perPage = (int) $request->query('per_page', 20);
+        $page = (int) $request->query('page', 1);
 
         // 1. Buscar categorias que o prestador atende
         $categoriasDoPrestador = $prestador->categorias()
@@ -386,21 +386,19 @@ class PropostaController extends Controller
         if (empty($categoriasDoPrestador)) {
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'pedidos' => [],
-                    'filtros' => [
-                        'categorias_disponiveis' => [],
-                        'categoria_selecionada' => $categoriaId,
-                        'raio_km' => (float) $raioKm,
-                        'ordenar_por' => $ordenarPor,
-                        'tem_localizacao' => false,
-                    ],
-                    'paginacao' => [
-                        'current_page' => (int) $page,
-                        'per_page' => (int) $perPage,
-                        'total' => 0,
-                        'total_pages' => 0,
-                    ]
+                'data' => [],  // ✅ RETORNAR ARRAY VAZIO
+                'filtros' => [
+                    'categorias_disponiveis' => [],
+                    'categoria_selecionada' => $categoriaId,
+                    'raio_km' => $raioKm,
+                    'ordenar_por' => $ordenarPor,
+                    'tem_localizacao' => false,
+                ],
+                'paginacao' => [
+                    'current_page' => $page,
+                    'per_page' => $perPage,
+                    'total' => 0,
+                    'total_pages' => 0,
                 ],
                 'message' => 'Você ainda não definiu suas categorias de atuação'
             ]);
@@ -414,21 +412,19 @@ class PropostaController extends Controller
         if (empty($categoriasFiltro)) {
             return response()->json([
                 'success' => true,
-                'data' => [
-                    'pedidos' => [],
-                    'filtros' => [
-                        'categorias_disponiveis' => $categoriasDoPrestador,
-                        'categoria_selecionada' => $categoriaId,
-                        'raio_km' => (float) $raioKm,
-                        'ordenar_por' => $ordenarPor,
-                        'tem_localizacao' => !empty($prestador->latitude),
-                    ],
-                    'paginacao' => [
-                        'current_page' => (int) $page,
-                        'per_page' => (int) $perPage,
-                        'total' => 0,
-                        'total_pages' => 0,
-                    ]
+                'data' => [],  // ✅ RETORNAR ARRAY VAZIO
+                'filtros' => [
+                    'categorias_disponiveis' => $categoriasDoPrestador,
+                    'categoria_selecionada' => $categoriaId,
+                    'raio_km' => $raioKm,
+                    'ordenar_por' => $ordenarPor,
+                    'tem_localizacao' => !empty($prestador->latitude),
+                ],
+                'paginacao' => [
+                    'current_page' => $page,
+                    'per_page' => $perPage,
+                    'total' => 0,
+                    'total_pages' => 0,
                 ],
                 'message' => 'Categoria selecionada não está nas suas áreas de atuação'
             ]);
@@ -476,21 +472,25 @@ class PropostaController extends Controller
         }
 
         // 6. Ordenar resultados
+        $collection = collect($pedidos);
+
         if ($ordenarPor === 'distancia' && $temLocalizacao) {
-            $pedidos = $pedidos->sortBy(function ($pedido) {
+            $collection = $collection->sortBy(function ($pedido) {
                 return $pedido->distancia_km ?? PHP_FLOAT_MAX;
             });
         } elseif ($ordenarPor === 'valor') {
-            $pedidos = $pedidos->sortBy('valor');
+            $collection = $collection->sortBy('valor');
         } else {
-            $pedidos = $pedidos->sortByDesc('created_at');
+            $collection = $collection->sortByDesc('created_at');
         }
 
-        // 7. Paginar
-        $paginated = $pedidos->forPage($page, $perPage)->values();
+        // 7. ✅ CONVERTER PARA ARRAY (NÃO USAR PAGINATOR DO ELOQUENT)
+        $total = $collection->count();
+        $offset = ($page - 1) * $perPage;
+        $pedidosPaginated = $collection->slice($offset, $perPage)->values();
 
         // 8. Formatar resposta
-        $result = $paginated->map(function ($pedido) {
+        $result = $pedidosPaginated->map(function ($pedido) {
             $distancia = $pedido->distancia_km;
             $distanciaTexto = $distancia !== null
                 ? ($distancia < 1
@@ -509,8 +509,8 @@ class PropostaController extends Controller
                 'categoria' => $pedido->categoria ? [
                     'id' => (int) $pedido->categoria->id,
                     'nome' => (string) $pedido->categoria->nome,
-                    'icone' => (string) $pedido->categoria->icone,
-                    'cor' => (string) $pedido->categoria->cor,
+                    'icone' => (string) ($pedido->categoria->icone ?? 'category'),
+                    'cor' => (string) ($pedido->categoria->cor ?? 'primary'),
                 ] : null,
                 'cliente' => $pedido->cliente ? [
                     'id' => (int) $pedido->cliente->id,
@@ -518,26 +518,25 @@ class PropostaController extends Controller
                     'foto' => $pedido->cliente->foto ? asset('storage/' . $pedido->cliente->foto) : null,
                 ] : null,
             ];
-        });
+        })->toArray();  // ✅ GARANTIR QUE É ARRAY
 
+        // ✅ RETORNAR COMO ARRAY SIMPLES
         return response()->json([
             'success' => true,
-            'data' => [
-                'pedidos' => $result,
-                'filtros' => [
-                    'categorias_disponiveis' => $categoriasDoPrestador,
-                    'categoria_selecionada' => $categoriaId,
-                    'raio_km' => (float) $raioKm,
-                    'ordenar_por' => $ordenarPor,
-                    'tem_localizacao' => $temLocalizacao,
-                ],
-                'paginacao' => [
-                    'current_page' => (int) $page,
-                    'per_page' => (int) $perPage,
-                    'total' => $pedidos->count(),
-                    'total_pages' => ceil($pedidos->count() / $perPage),
-                ]
+            'data' => $result,  // ✅ ARRAY, não LengthAwarePaginator
+            'filtros' => [
+                'categorias_disponiveis' => $categoriasDoPrestador,
+                'categoria_selecionada' => $categoriaId,
+                'raio_km' => $raioKm,
+                'ordenar_por' => $ordenarPor,
+                'tem_localizacao' => $temLocalizacao,
             ],
+            'paginacao' => [
+                'current_page' => $page,
+                'per_page' => $perPage,
+                'total' => $total,
+                'total_pages' => ceil($total / $perPage),
+            ]
         ]);
     }
 

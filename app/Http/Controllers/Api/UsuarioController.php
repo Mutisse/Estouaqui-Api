@@ -41,22 +41,54 @@ class UsuarioController extends Controller
      * Obter perfil do usuário autenticado - COM CACHE OTIMIZADO
      * GET /api/me
      */
+    /**
+     * Obter perfil do usuário autenticado - COM CACHE OTIMIZADO
+     * GET /api/me
+     */
     public function me(Request $request)
     {
         $user = $request->user();
         $cacheKey = "user_profile_{$user->id}";
 
         $data = Cache::remember($cacheKey, self::CACHE_LONG, function () use ($user) {
+            // ✅ Buscar preferências
+            $preferences = $user->preferences;
+            if (is_string($preferences)) {
+                $preferences = json_decode($preferences, true);
+            }
+
+            // ✅ CORRIGIDO: Buscar portfolio e gerar URLs
+            $portfolio = [];
+            if (!empty($preferences['portfolio']) && is_array($preferences['portfolio'])) {
+                foreach ($preferences['portfolio'] as $path) {
+                    if (filter_var($path, FILTER_VALIDATE_URL)) {
+                        $portfolio[] = $path;
+                    } else {
+                        // Remove barras no início e garante o caminho correto
+                        $cleanPath = ltrim($path, '/');
+                        $portfolio[] = asset('storage/' . $cleanPath);
+                    }
+                }
+            }
+
             return [
                 'id' => $user->id,
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
                 'endereco' => $user->endereco,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $user->foto ? (filter_var($user->foto, FILTER_VALIDATE_URL) ? $user->foto : asset('storage/' . ltrim($user->foto, '/'))) : null,
                 'tipo' => $user->tipo,
                 'email_verified_at' => $user->email_verified_at,
                 'created_at' => $user->created_at,
+                'sobre' => $user->sobre ?? '',
+                'profissao' => $user->profissao ?? '',
+                'media_avaliacao' => (float) ($user->media_avaliacao ?? 0),
+                'total_avaliacoes' => (int) ($user->total_avaliacoes ?? 0),
+                'verificado' => (bool) ($user->verificado ?? false),
+                'ativo' => (bool) ($user->ativo ?? true),
+                'preferences' => $preferences,
+                'portfolio' => $portfolio,
             ];
         });
 
