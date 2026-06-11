@@ -29,13 +29,13 @@ class AdminNotificacaoController extends Controller
 
             $result = Cache::remember($cacheKey, self::CACHE_TIME, function () use ($request, $perPage, $page) {
                 $query = Notificacao::query()
-                    ->select(['id', 'user_id', 'tipo', 'titulo', 'mensagem', 'lida', 'lida_em', 'created_at']);
+                    ->select(['id', 'user_id', 'tipo', 'titulo', 'mensagem', 'lida', 'lida_em', 'created_at', 'updated_at']);
 
                 $this->applyFilters($query, $request);
 
                 $notificacoes = $query->orderBy('created_at', 'desc')->paginate($perPage);
 
-                // Converter para o formato esperado pelo frontend
+                // Converter para o formato esperado pelo frontend com datas corrigidas
                 $items = [];
                 foreach ($notificacoes as $notif) {
                     $items[] = [
@@ -44,9 +44,9 @@ class AdminNotificacaoController extends Controller
                         'type' => $notif->tipo,
                         'title' => $notif->titulo,
                         'message' => $notif->mensagem,
-                        'read_at' => $notif->lida_em, // mapear lida_em para read_at
-                        'created_at' => $notif->created_at,
-                        'updated_at' => $notif->updated_at,
+                        'read_at' => $notif->lida_em ? $notif->lida_em->toISOString() : null,
+                        'created_at' => $notif->created_at ? $notif->created_at->toISOString() : null,
+                        'updated_at' => $notif->updated_at ? $notif->updated_at->toISOString() : null,
                     ];
                 }
 
@@ -93,9 +93,9 @@ class AdminNotificacaoController extends Controller
                     'type' => $notificacao->tipo,
                     'title' => $notificacao->titulo,
                     'message' => $notificacao->mensagem,
-                    'read_at' => $notificacao->lida_em,
-                    'created_at' => $notificacao->created_at,
-                    'updated_at' => $notificacao->updated_at,
+                    'read_at' => $notificacao->lida_em ? $notificacao->lida_em->toISOString() : null,
+                    'created_at' => $notificacao->created_at ? $notificacao->created_at->toISOString() : null,
+                    'updated_at' => $notificacao->updated_at ? $notificacao->updated_at->toISOString() : null,
                 ]
             ]);
         } catch (\Exception $e) {

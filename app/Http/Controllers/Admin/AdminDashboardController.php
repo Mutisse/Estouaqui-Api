@@ -357,6 +357,9 @@ class AdminDashboardController extends Controller
     /**
      * Versão simplificada para o frontend
      */
+    /**
+     * Versão simplificada para o frontend
+     */
     public function stats()
     {
         try {
@@ -374,7 +377,7 @@ class AdminDashboardController extends Controller
                     ->where('created_at', '>=', $startOfMonth)
                     ->sum('valor'),
                 'prestadores_pendentes' => User::where('tipo', 'prestador')
-                    ->whereNull('verificado_em')
+                    ->where('verificado', 0)  // ← CORRIGIDO
                     ->count(),
                 'tickets_abertos' => 0,
                 'notificacoes_nao_lidas' => 0,
