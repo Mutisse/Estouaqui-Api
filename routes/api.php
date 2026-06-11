@@ -452,10 +452,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ROTAS DE TESTE
 // ==========================================
 
+// ROTA DE HEALTH CHECK (fora de qualquer grupo)
 Route::get('/health', function () {
     return response()->json([
         'status' => 'ok',
         'timestamp' => now(),
-        'message' => 'API EstouAqui está funcionando!'
+        'app' => 'EstouAqui API',
+        'version' => '1.0.0',
+        'environment' => app()->environment()
     ]);
 });
