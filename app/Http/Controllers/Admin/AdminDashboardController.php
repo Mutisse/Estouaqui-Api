@@ -353,4 +353,41 @@ class AdminDashboardController extends Controller
         ];
         return $icones[$categoriaId] ?? 'receipt';
     }
+
+    /**
+     * Versão simplificada para o frontend
+     */
+    public function stats()
+    {
+        try {
+            $startOfMonth = Carbon::now()->startOfMonth();
+
+            $stats = [
+                'total_usuarios' => User::count(),
+                'total_prestadores' => User::where('tipo', 'prestador')->count(),
+                'total_clientes' => User::where('tipo', 'cliente')->count(),
+                'total_pedidos' => Pedido::count(),
+                'pedidos_pendentes' => Pedido::where('status', 'pendente')->count(),
+                'pedidos_concluidos' => Pedido::where('status', 'concluido')->count(),
+                'ganhos_totais' => (float) Pedido::where('status', 'concluido')->sum('valor'),
+                'ganhos_mes' => (float) Pedido::where('status', 'concluido')
+                    ->where('created_at', '>=', $startOfMonth)
+                    ->sum('valor'),
+                'prestadores_pendentes' => User::where('tipo', 'prestador')
+                    ->whereNull('verificado_em')
+                    ->count(),
+                'tickets_abertos' => 0,
+                'notificacoes_nao_lidas' => 0,
+                'alertas_ativos' => 0,
+                'avaliacoes_pendentes' => 0,
+            ];
+
+            return response()->json(['success' => true, 'data' => $stats]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro: ' . $e->getMessage()
+            ], 500);
+        }
+    }
 }

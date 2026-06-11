@@ -96,6 +96,7 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('/admin')->group(function (
     Route::get('/dashboard/atividade', [AdminDashboardController::class, 'atividade']);
     Route::get('/dashboard/ultimos-utilizadores', [AdminDashboardController::class, 'ultimosUtilizadores']);
     Route::get('/dashboard/servicos-recentes', [AdminDashboardController::class, 'servicosRecentes']);
+    Route::get('/dashboard/stats', [AdminDashboardController::class, 'stats']);  // ← NOVA LINHA
 
     // ==================== ADMIN - UTILIZADORES ====================
     Route::get('/utilizadores', [AdminUtilizadorController::class, 'index']);
@@ -452,13 +453,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ROTAS DE TESTE
 // ==========================================
 
-// ROTA DE HEALTH CHECK (fora de qualquer grupo)
 Route::get('/health', function () {
     return response()->json([
         'status' => 'ok',
         'timestamp' => now(),
-        'app' => 'EstouAqui API',
-        'version' => '1.0.0',
-        'environment' => app()->environment()
+        'message' => 'API EstouAqui está funcionando!'
     ]);
 });
