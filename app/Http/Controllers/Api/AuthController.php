@@ -7,7 +7,7 @@ use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
-use Illuminate\Support\Facades\Storage;  // ✅ ADICIONAR ESTA LINHA
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Auth\Events\PasswordReset;
 
@@ -203,24 +203,16 @@ class AuthController extends BaseController
     }
 
     /**
-     * Registro de novo usuário
-     */
-    /**
-     * Registro de novo usuário - DETECTA automaticamente o tipo
-     * Baseado nos dados recebidos
-     */
-    /**
-     * Registro de novo usuário - DETECTA automaticamente o tipo
-     * Baseado nos dados recebidos
+     * Registro de novo usuário - CORRIGIDO (sem confirmed)
      */
     public function register(Request $request)
     {
-        // Validação base (comum para todos)
+        // Validação base - REMOVIDO 'confirmed' da validação de password
         $request->validate([
             'nome' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'telefone' => 'required|string|unique:users,telefone',
-            'password' => 'required|string|min:6|confirmed',
+            'password' => 'required|string|min:6', // ← 'confirmed' REMOVIDO
 
             // Campos opcionais
             'endereco' => 'nullable|string',
@@ -234,8 +226,8 @@ class AuthController extends BaseController
             'longitude' => 'nullable|numeric',
             'categorias' => 'nullable|json',
             'disponibilidade' => 'nullable|json',
-            'portfolio.*' => 'nullable|image|max:5120', // múltiplas imagens
-            'documento' => 'nullable|file|max:10240', // até 10MB
+            'portfolio.*' => 'nullable|image|max:5120',
+            'documento' => 'nullable|file|max:10240',
         ]);
 
         // ========== DETECTAR TIPO DE PERFIL AUTOMATICAMENTE ==========
@@ -383,7 +375,6 @@ class AuthController extends BaseController
 
     /**
      * Atualizar perfil do usuário
-     * PUT /api/auth/user
      */
     public function updateProfile(Request $request)
     {
@@ -429,7 +420,6 @@ class AuthController extends BaseController
 
     /**
      * Upload de foto do usuário
-     * POST /api/upload/foto
      */
     public function uploadFoto(Request $request)
     {
@@ -468,7 +458,6 @@ class AuthController extends BaseController
 
     /**
      * Retorna os dados do usuário autenticado
-     * GET /api/auth/user
      */
     public function user(Request $request)
     {

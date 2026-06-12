@@ -66,12 +66,19 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/categorias', [CategoriaController::class, 'index']);
 Route::get('/categorias/{id}', [CategoriaController::class, 'show']);
 
-// Configurações públicas
-Route::get('/configuracoes/prestador', [ConfiguracaoController::class, 'getPrestadorConfig']);
-Route::get('/configuracoes/raio-options', [ConfiguracaoController::class, 'raioOptions']);
-Route::get('/configuracoes/ordenacao-options', [ConfiguracaoController::class, 'ordenacaoOptions']);
-Route::get('/configuracoes/{chave}', [ConfiguracaoController::class, 'show']);
-Route::get('/configuracoes/grupo/{grupo}', [ConfiguracaoController::class, 'byGroup']);
+// ==========================================
+// ROTAS DE CONFIGURAÇÕES PÚBLICAS (CORRIGIDAS)
+// ==========================================
+Route::prefix('/configuracoes')->group(function () {
+    // Rotas específicas primeiro
+    Route::get('/prestador', [ConfiguracaoController::class, 'getPrestadorConfig']);
+    Route::get('/cliente', [ConfiguracaoController::class, 'getClienteConfig']);
+    Route::get('/sistema', [ConfiguracaoController::class, 'getSistemaConfig']);
+    Route::get('/grupo/{grupo}', [ConfiguracaoController::class, 'getByGroup']);
+
+    // Rotas com parâmetros depois
+    Route::get('/{chave}', [ConfiguracaoController::class, 'show']);
+});
 
 // Prestadores públicos
 Route::get('/prestadores/proximos', [PrestadorController::class, 'proximos']);
@@ -86,208 +93,6 @@ Route::get('/prestadores/{id}', [PrestadorController::class, 'show']);
 Route::get('/promocoes', [PromocaoController::class, 'index']);
 
 // ==========================================
-// ROTAS ADMIN (requerem token e role admin/root)
-// ==========================================
-Route::middleware(['auth:sanctum', 'admin'])->prefix('/admin')->group(function () {
-
-    // ==================== ADMIN - DASHBOARD ====================
-    Route::get('/dashboard', [AdminDashboardController::class, 'index']);
-    Route::get('/dashboard/estatisticas', [AdminDashboardController::class, 'estatisticas']);
-    Route::get('/dashboard/atividade', [AdminDashboardController::class, 'atividade']);
-    Route::get('/dashboard/ultimos-utilizadores', [AdminDashboardController::class, 'ultimosUtilizadores']);
-    Route::get('/dashboard/servicos-recentes', [AdminDashboardController::class, 'servicosRecentes']);
-    Route::get('/dashboard/stats', [AdminDashboardController::class, 'stats']);  // ← NOVA LINHA
-
-    // ==================== ADMIN - UTILIZADORES ====================
-    Route::get('/utilizadores', [AdminUtilizadorController::class, 'index']);
-    Route::get('/utilizadores/{id}', [AdminUtilizadorController::class, 'show']);
-    Route::post('/utilizadores', [AdminUtilizadorController::class, 'store']);
-    Route::put('/utilizadores/{id}', [AdminUtilizadorController::class, 'update']);
-    Route::delete('/utilizadores/{id}', [AdminUtilizadorController::class, 'destroy']);
-    Route::put('/utilizadores/{id}/verificar', [AdminUtilizadorController::class, 'verificar']);
-    Route::put('/utilizadores/{id}/bloquear', [AdminUtilizadorController::class, 'bloquear']);
-    Route::put('/utilizadores/{id}/desbloquear', [AdminUtilizadorController::class, 'desbloquear']);
-
-    // ==================== ADMIN - PRESTADORES ====================
-    Route::get('/prestadores/profissoes', [AdminPrestadorController::class, 'profissoes']);
-    Route::get('/prestadores', [AdminPrestadorController::class, 'index']);
-    Route::get('/prestadores/{id}', [AdminPrestadorController::class, 'show']);
-    Route::post('/prestadores', [AdminPrestadorController::class, 'store']);
-    Route::put('/prestadores/{id}', [AdminPrestadorController::class, 'update']);
-    Route::delete('/prestadores/{id}', [AdminPrestadorController::class, 'destroy']);
-    Route::put('/prestadores/{id}/verificar', [AdminPrestadorController::class, 'verificar']);
-    Route::put('/prestadores/{id}/ativar', [AdminPrestadorController::class, 'ativar']);
-    Route::put('/prestadores/{id}/desativar', [AdminPrestadorController::class, 'desativar']);
-
-    // ==================== ADMIN - CATEGORIAS ====================
-    Route::get('/categorias', [AdminCategoriaController::class, 'index']);
-    Route::get('/categorias/{id}', [AdminCategoriaController::class, 'show']);
-    Route::post('/categorias', [AdminCategoriaController::class, 'store']);
-    Route::put('/categorias/{id}', [AdminCategoriaController::class, 'update']);
-    Route::delete('/categorias/{id}', [AdminCategoriaController::class, 'destroy']);
-    Route::put('/categorias/{id}/status', [AdminCategoriaController::class, 'alternarStatus']);
-    Route::post('/categorias/reordenar', [AdminCategoriaController::class, 'reordenar']);
-
-    // ==================== ADMIN - PEDIDOS ====================
-    Route::get('/pedidos', [AdminPedidoController::class, 'index']);
-    Route::get('/pedidos/{id}', [AdminPedidoController::class, 'show']);
-    Route::put('/pedidos/{id}/status', [AdminPedidoController::class, 'atualizarStatus']);
-    Route::post('/pedidos/{id}/cancelar', [AdminPedidoController::class, 'cancelar']);
-    Route::delete('/pedidos/{id}', [AdminPedidoController::class, 'destroy']);
-    Route::get('/pedidos/{id}/propostas', [AdminPedidoController::class, 'propostas']);
-    Route::post('/propostas/{id}/aceitar', [AdminPedidoController::class, 'aceitarProposta']);
-    Route::post('/propostas/{id}/recusar', [AdminPedidoController::class, 'recusarProposta']);
-    Route::get('/pedidos/estatisticas', [AdminPedidoController::class, 'estatisticas']);
-
-
-    // ==================== ADMIN - SERVIÇOS ====================
-    Route::get('/servicos/estatisticas', [AdminServicoController::class, 'estatisticas']);  // <-- MOVER PARA CIMA
-    Route::get('/servicos', [AdminServicoController::class, 'index']);
-    Route::post('/servicos', [AdminServicoController::class, 'store']);
-    Route::get('/servicos/{id}', [AdminServicoController::class, 'show']);
-    Route::put('/servicos/{id}', [AdminServicoController::class, 'update']);
-    Route::delete('/servicos/{id}', [AdminServicoController::class, 'destroy']);
-    Route::put('/servicos/{id}/status', [AdminServicoController::class, 'alternarStatus']);
-
-    // ==================== ADMIN - AVALIAÇÕES ====================
-    Route::get('/avaliacoes/estatisticas', [AdminAvaliacaoController::class, 'estatisticas']);
-    Route::get('/avaliacoes', [AdminAvaliacaoController::class, 'index']);
-    Route::get('/avaliacoes/{id}', [AdminAvaliacaoController::class, 'show']);
-    Route::put('/avaliacoes/{id}/aprovar', [AdminAvaliacaoController::class, 'aprovar']);
-    Route::put('/avaliacoes/{id}/rejeitar', [AdminAvaliacaoController::class, 'rejeitar']);
-    Route::delete('/avaliacoes/{id}', [AdminAvaliacaoController::class, 'destroy']);
-
-
-    // ==================== ADMIN - FINANCEIRO ====================
-    Route::get('/financeiro', [AdminFinanceiroController::class, 'index']);
-    Route::get('/financeiro/resumo', [AdminFinanceiroController::class, 'resumo']);
-    Route::get('/financeiro/transacoes', [AdminFinanceiroController::class, 'transacoes']);
-    Route::post('/financeiro/transacoes', [AdminFinanceiroController::class, 'registrarTransacao']);
-    Route::put('/financeiro/transacoes/{id}/status', [AdminFinanceiroController::class, 'atualizarStatusTransacao']);
-    Route::get('/financeiro/ganhos-por-mes', [AdminFinanceiroController::class, 'ganhosPorMes']);
-    Route::get('/financeiro/saques/pendentes', [AdminFinanceiroController::class, 'saquesPendentes']);
-    Route::get('/financeiro/saques/ultimos', [AdminFinanceiroController::class, 'ultimosSaques']);
-    Route::post('/financeiro/saques/{id}/aprovar', [AdminFinanceiroController::class, 'aprovarSaque']);
-    Route::post('/financeiro/saques/{id}/concluir', [AdminFinanceiroController::class, 'concluirSaque']);
-    Route::post('/financeiro/saques/{id}/recusar', [AdminFinanceiroController::class, 'recusarSaque']);
-    Route::get('/financeiro/exportar', [AdminFinanceiroController::class, 'exportar']);
-
-    // ==================== ADMIN - PROMOÇÕES ====================
-    Route::get('/promocoes/estatisticas', [AdminPromocaoController::class, 'estatisticas']);
-    Route::get('/promocoes', [AdminPromocaoController::class, 'index']);
-    Route::get('/promocoes/{id}', [AdminPromocaoController::class, 'show']);
-    Route::post('/promocoes', [AdminPromocaoController::class, 'store']);
-    Route::put('/promocoes/{id}', [AdminPromocaoController::class, 'update']);
-    Route::delete('/promocoes/{id}', [AdminPromocaoController::class, 'destroy']);
-    Route::put('/promocoes/{id}/status', [AdminPromocaoController::class, 'alternarStatus']);
-
-
-    // ==================== ADMIN - NOTIFICAÇÕES ====================
-    Route::get('/notificacoes/templates', [AdminNotificacaoController::class, 'templates']);  // <-- ADICIONAR ESTA LINHA PRIMEIRO
-    Route::get('/notificacoes/estatisticas', [AdminNotificacaoController::class, 'estatisticas']);
-    Route::get('/notificacoes', [AdminNotificacaoController::class, 'index']);
-    Route::get('/notificacoes/{id}', [AdminNotificacaoController::class, 'show']);
-    Route::post('/notificacoes/enviar', [AdminNotificacaoController::class, 'enviar']);
-    Route::delete('/notificacoes/{id}', [AdminNotificacaoController::class, 'destroy']);
-    Route::put('/notificacoes/{id}/marcar-lida', [AdminNotificacaoController::class, 'marcarComoLida']);
-    Route::put('/notificacoes/marcar-todas-lidas', [AdminNotificacaoController::class, 'marcarTodasComoLidas']);
-
-    // ==================== ADMIN - BACKUPS ====================
-    Route::get('/backups/estatisticas', [AdminBackupController::class, 'estatisticas']);
-    Route::get('/backups', [AdminBackupController::class, 'index']);
-    Route::post('/backups', [AdminBackupController::class, 'store']);
-    Route::delete('/backups/{id}', [AdminBackupController::class, 'destroy']);
-    Route::get('/backups/{id}/download', [AdminBackupController::class, 'download']);
-    Route::post('/backups/{id}/restaurar', [AdminBackupController::class, 'restaurar']);
-    Route::get('/backups/configuracoes', [AdminBackupController::class, 'configuracoes']);
-    Route::put('/backups/configuracoes', [AdminBackupController::class, 'atualizarConfiguracoes']);
-    Route::delete('/backups/limpar', [AdminBackupController::class, 'limpar']);
-
-    // ==================== ADMIN - LOGS ====================
-    Route::get('/logs', [AdminLogController::class, 'index']);
-    Route::get('/logs/estatisticas', [AdminLogController::class, 'estatisticas']);
-    Route::delete('/logs/limpar', [AdminLogController::class, 'limpar']);
-    Route::get('/logs/exportar', [AdminLogController::class, 'exportar']);
-
-    // ==================== ADMIN - PERFORMANCE ====================
-    Route::get('/performance', [AdminPerformanceController::class, 'index']);
-    Route::get('/performance/realtime', [AdminPerformanceController::class, 'realtime']);
-    Route::get('/performance/historico', [AdminPerformanceController::class, 'historico']);
-
-    // ==================== ADMIN - MONITORAMENTO ====================
-    Route::get('/monitoramento/estatisticas', [AdminMonitoramentoController::class, 'estatisticas']);
-    Route::get('/monitoramento/status', [AdminMonitoramentoController::class, 'status']);
-    Route::get('/monitoramento/alertas', [AdminMonitoramentoController::class, 'alertas']);
-    Route::put('/monitoramento/alertas/{id}/ler', [AdminMonitoramentoController::class, 'marcarAlertaLido']);
-    Route::put('/monitoramento/alertas/marcar-todos-lidos', [AdminMonitoramentoController::class, 'marcarTodosAlertasLidos']);
-    Route::get('/monitoramento/logs', [AdminMonitoramentoController::class, 'logs']);
-    Route::delete('/monitoramento/logs/limpar', [AdminMonitoramentoController::class, 'limparLogs']);
-    Route::get('/monitoramento/metricas', [AdminMonitoramentoController::class, 'metricas']);
-    Route::get('/monitoramento/testar/{servico}', [AdminMonitoramentoController::class, 'testarServico']);
-
-    // ==================== ADMIN - SUPORTE ====================
-    Route::get('/suporte/estatisticas', [AdminSuporteController::class, 'estatisticas']);
-    Route::get('/suporte/tickets', [AdminSuporteController::class, 'index']);
-    Route::get('/suporte/tickets/{id}', [AdminSuporteController::class, 'show']);
-    Route::put('/suporte/tickets/{id}/status', [AdminSuporteController::class, 'atualizarStatus']);
-    Route::put('/suporte/tickets/{id}/prioridade', [AdminSuporteController::class, 'atualizarPrioridade']);
-    Route::delete('/suporte/tickets/{id}', [AdminSuporteController::class, 'destroy']);
-    Route::get('/suporte/tickets/{id}/mensagens', [AdminSuporteController::class, 'mensagens']);
-    Route::post('/suporte/tickets/{id}/mensagens', [AdminSuporteController::class, 'enviarMensagem']);
-    Route::put('/suporte/tickets/{id}/atribuir', [AdminSuporteController::class, 'atribuirAdmin']);
-
-    // ==================== ADMIN - CHAT ====================
-    Route::get('/suporte/chat/tickets', [AdminSuporteController::class, 'chatTickets']);
-    Route::get('/suporte/chat/tickets/{id}/mensagens', [AdminSuporteController::class, 'chatMensagens']);
-    Route::post('/suporte/chat/tickets/{id}/enviar', [AdminSuporteController::class, 'enviarChatMensagem']);
-    Route::get('/suporte/chat/tickets/{id}/novas', [AdminSuporteController::class, 'novasMensagensChat']);
-    Route::put('/suporte/chat/tickets/{id}/marcar-lidas', [AdminSuporteController::class, 'marcarChatLidas']);
-
-    // ==================== ADMIN - RELATÓRIOS ====================
-    Route::get('/relatorios/pedidos', [AdminRelatorioController::class, 'pedidos']);
-    Route::get('/relatorios/financeiro', [AdminRelatorioController::class, 'financeiro']);
-    Route::get('/relatorios/prestadores', [AdminRelatorioController::class, 'prestadores']);
-    Route::get('/relatorios/clientes', [AdminRelatorioController::class, 'clientes']);
-    Route::get('/relatorios/{tipo}/exportar', [AdminRelatorioController::class, 'exportar']);
-
-    // ==================== ADMIN - ESTATÍSTICAS ====================
-    Route::get('/estatisticas', [AdminEstatisticaController::class, 'index']);
-    Route::get('/estatisticas/{periodo}', [AdminEstatisticaController::class, 'porPeriodo']);
-    Route::get('/estatisticas/graficos', [AdminEstatisticaController::class, 'graficos']);
-
-    // ==================== ADMIN - PERFIL ====================
-    Route::get('/perfil', [AdminPerfilController::class, 'getPerfil']);
-    Route::put('/perfil', [AdminPerfilController::class, 'atualizarPerfil']);
-    Route::put('/perfil/senha', [AdminPerfilController::class, 'alterarSenha']);
-    Route::post('/perfil/foto', [AdminPerfilController::class, 'atualizarFoto']);
-    Route::get('/atividades', [AdminPerfilController::class, 'getAtividades']);
-
-    // ==================== ADMIN - CONFIGURAÇÕES ====================
-    Route::get('/configuracoes/todas', [AdminConfiguracoesController::class, 'getTodasConfiguracoes']); // UMA ÚNICA ROTA - OTIMIZADO
-    Route::get('/configuracoes/gerais', [AdminConfiguracoesController::class, 'getConfiguracoesGerais']);
-    Route::put('/configuracoes/gerais', [AdminConfiguracoesController::class, 'atualizarConfiguracoesGerais']);
-    Route::get('/configuracoes/prestador', [AdminConfiguracoesController::class, 'getConfiguracoesPrestador']);
-    Route::put('/configuracoes/prestador', [AdminConfiguracoesController::class, 'atualizarConfiguracoesPrestador']);
-    Route::get('/configuracoes/pagamento', [AdminConfiguracoesController::class, 'getConfiguracoesPagamento']);
-    Route::put('/configuracoes/pagamento', [AdminConfiguracoesController::class, 'atualizarConfiguracoesPagamento']);
-
-    // Opções para selects
-    Route::get('/configuracoes/opcoes/raios', [AdminConfiguracoesController::class, 'getOpcoesRaios']);
-    Route::get('/configuracoes/opcoes/dias-semana', [AdminConfiguracoesController::class, 'getOpcoesDiasSemana']);
-    Route::get('/configuracoes/opcoes/documentos', [AdminConfiguracoesController::class, 'getOpcoesDocumentos']);
-    Route::get('/configuracoes/opcoes/fuso-horario', [AdminConfiguracoesController::class, 'getOpcoesFusoHorario']);
-    Route::get('/configuracoes/opcoes/moeda', [AdminConfiguracoesController::class, 'getOpcoesMoeda']);
-    Route::get('/configuracoes/opcoes/criptografia', [AdminConfiguracoesController::class, 'getOpcoesCriptografia']);
-    Route::get('/configuracoes/opcoes/modulos', [AdminConfiguracoesController::class, 'getOpcoesModulos']);
-
-    // ==================== ADMIN - PERMISSÕES ====================
-    Route::get('/permissoes', [AdminConfiguracoesController::class, 'getPermissoes']);
-    Route::get('/roles', [AdminConfiguracoesController::class, 'getRoles']);
-    Route::put('/permissoes/{id}', [AdminConfiguracoesController::class, 'atualizarPermissao']);
-    Route::put('/roles/{id}', [AdminConfiguracoesController::class, 'atualizarRole']);
-});
-
-// ==========================================
 // ROTAS PROTEGIDAS (requerem token)
 // ==========================================
 Route::middleware(['auth:sanctum'])->group(function () {
@@ -297,6 +102,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/auth/verify', [AuthController::class, 'verify']);
     Route::get('/auth/user', [AuthController::class, 'user']);
     Route::put('/auth/user', [AuthController::class, 'updateProfile']);
+
+    // ========== CONFIGURAÇÕES PROTEGIDAS ==========
+    Route::prefix('/configuracoes')->group(function () {
+        Route::put('/{chave}', [ConfiguracaoController::class, 'update']);
+    });
 
     // ========== DASHBOARD CLIENTE ==========
     Route::get('/cliente/dashboard', [DashboardController::class, 'index']);
@@ -450,9 +260,207 @@ Route::middleware(['auth:sanctum'])->group(function () {
 });
 
 // ==========================================
+// ROTAS ADMIN (requerem token e role admin/root)
+// ==========================================
+Route::middleware(['auth:sanctum', 'admin'])->prefix('/admin')->group(function () {
+
+    // ==================== ADMIN - DASHBOARD ====================
+    Route::get('/dashboard', [AdminDashboardController::class, 'index']);
+    Route::get('/dashboard/estatisticas', [AdminDashboardController::class, 'estatisticas']);
+    Route::get('/dashboard/atividade', [AdminDashboardController::class, 'atividade']);
+    Route::get('/dashboard/ultimos-utilizadores', [AdminDashboardController::class, 'ultimosUtilizadores']);
+    Route::get('/dashboard/servicos-recentes', [AdminDashboardController::class, 'servicosRecentes']);
+    Route::get('/dashboard/stats', [AdminDashboardController::class, 'stats']);
+
+    // ==================== ADMIN - UTILIZADORES ====================
+    Route::get('/utilizadores', [AdminUtilizadorController::class, 'index']);
+    Route::get('/utilizadores/{id}', [AdminUtilizadorController::class, 'show']);
+    Route::post('/utilizadores', [AdminUtilizadorController::class, 'store']);
+    Route::put('/utilizadores/{id}', [AdminUtilizadorController::class, 'update']);
+    Route::delete('/utilizadores/{id}', [AdminUtilizadorController::class, 'destroy']);
+    Route::put('/utilizadores/{id}/verificar', [AdminUtilizadorController::class, 'verificar']);
+    Route::put('/utilizadores/{id}/bloquear', [AdminUtilizadorController::class, 'bloquear']);
+    Route::put('/utilizadores/{id}/desbloquear', [AdminUtilizadorController::class, 'desbloquear']);
+
+    // ==================== ADMIN - PRESTADORES ====================
+    Route::get('/prestadores/profissoes', [AdminPrestadorController::class, 'profissoes']);
+    Route::get('/prestadores', [AdminPrestadorController::class, 'index']);
+    Route::get('/prestadores/{id}', [AdminPrestadorController::class, 'show']);
+    Route::post('/prestadores', [AdminPrestadorController::class, 'store']);
+    Route::put('/prestadores/{id}', [AdminPrestadorController::class, 'update']);
+    Route::delete('/prestadores/{id}', [AdminPrestadorController::class, 'destroy']);
+    Route::put('/prestadores/{id}/verificar', [AdminPrestadorController::class, 'verificar']);
+    Route::put('/prestadores/{id}/ativar', [AdminPrestadorController::class, 'ativar']);
+    Route::put('/prestadores/{id}/desativar', [AdminPrestadorController::class, 'desativar']);
+
+    // ==================== ADMIN - CATEGORIAS ====================
+    Route::get('/categorias', [AdminCategoriaController::class, 'index']);
+    Route::get('/categorias/{id}', [AdminCategoriaController::class, 'show']);
+    Route::post('/categorias', [AdminCategoriaController::class, 'store']);
+    Route::put('/categorias/{id}', [AdminCategoriaController::class, 'update']);
+    Route::delete('/categorias/{id}', [AdminCategoriaController::class, 'destroy']);
+    Route::put('/categorias/{id}/status', [AdminCategoriaController::class, 'alternarStatus']);
+    Route::post('/categorias/reordenar', [AdminCategoriaController::class, 'reordenar']);
+
+    // ==================== ADMIN - PEDIDOS ====================
+    Route::get('/pedidos', [AdminPedidoController::class, 'index']);
+    Route::get('/pedidos/{id}', [AdminPedidoController::class, 'show']);
+    Route::put('/pedidos/{id}/status', [AdminPedidoController::class, 'atualizarStatus']);
+    Route::post('/pedidos/{id}/cancelar', [AdminPedidoController::class, 'cancelar']);
+    Route::delete('/pedidos/{id}', [AdminPedidoController::class, 'destroy']);
+    Route::get('/pedidos/{id}/propostas', [AdminPedidoController::class, 'propostas']);
+    Route::post('/propostas/{id}/aceitar', [AdminPedidoController::class, 'aceitarProposta']);
+    Route::post('/propostas/{id}/recusar', [AdminPedidoController::class, 'recusarProposta']);
+    Route::get('/pedidos/estatisticas', [AdminPedidoController::class, 'estatisticas']);
+
+    // ==================== ADMIN - SERVIÇOS ====================
+    Route::get('/servicos/estatisticas', [AdminServicoController::class, 'estatisticas']);
+    Route::get('/servicos', [AdminServicoController::class, 'index']);
+    Route::post('/servicos', [AdminServicoController::class, 'store']);
+    Route::get('/servicos/{id}', [AdminServicoController::class, 'show']);
+    Route::put('/servicos/{id}', [AdminServicoController::class, 'update']);
+    Route::delete('/servicos/{id}', [AdminServicoController::class, 'destroy']);
+    Route::put('/servicos/{id}/status', [AdminServicoController::class, 'alternarStatus']);
+
+    // ==================== ADMIN - AVALIAÇÕES ====================
+    Route::get('/avaliacoes/estatisticas', [AdminAvaliacaoController::class, 'estatisticas']);
+    Route::get('/avaliacoes', [AdminAvaliacaoController::class, 'index']);
+    Route::get('/avaliacoes/{id}', [AdminAvaliacaoController::class, 'show']);
+    Route::put('/avaliacoes/{id}/aprovar', [AdminAvaliacaoController::class, 'aprovar']);
+    Route::put('/avaliacoes/{id}/rejeitar', [AdminAvaliacaoController::class, 'rejeitar']);
+    Route::delete('/avaliacoes/{id}', [AdminAvaliacaoController::class, 'destroy']);
+
+    // ==================== ADMIN - FINANCEIRO ====================
+    Route::get('/financeiro', [AdminFinanceiroController::class, 'index']);
+    Route::get('/financeiro/resumo', [AdminFinanceiroController::class, 'resumo']);
+    Route::get('/financeiro/transacoes', [AdminFinanceiroController::class, 'transacoes']);
+    Route::post('/financeiro/transacoes', [AdminFinanceiroController::class, 'registrarTransacao']);
+    Route::put('/financeiro/transacoes/{id}/status', [AdminFinanceiroController::class, 'atualizarStatusTransacao']);
+    Route::get('/financeiro/ganhos-por-mes', [AdminFinanceiroController::class, 'ganhosPorMes']);
+    Route::get('/financeiro/saques/pendentes', [AdminFinanceiroController::class, 'saquesPendentes']);
+    Route::get('/financeiro/saques/ultimos', [AdminFinanceiroController::class, 'ultimosSaques']);
+    Route::post('/financeiro/saques/{id}/aprovar', [AdminFinanceiroController::class, 'aprovarSaque']);
+    Route::post('/financeiro/saques/{id}/concluir', [AdminFinanceiroController::class, 'concluirSaque']);
+    Route::post('/financeiro/saques/{id}/recusar', [AdminFinanceiroController::class, 'recusarSaque']);
+    Route::get('/financeiro/exportar', [AdminFinanceiroController::class, 'exportar']);
+
+    // ==================== ADMIN - PROMOÇÕES ====================
+    Route::get('/promocoes/estatisticas', [AdminPromocaoController::class, 'estatisticas']);
+    Route::get('/promocoes', [AdminPromocaoController::class, 'index']);
+    Route::get('/promocoes/{id}', [AdminPromocaoController::class, 'show']);
+    Route::post('/promocoes', [AdminPromocaoController::class, 'store']);
+    Route::put('/promocoes/{id}', [AdminPromocaoController::class, 'update']);
+    Route::delete('/promocoes/{id}', [AdminPromocaoController::class, 'destroy']);
+    Route::put('/promocoes/{id}/status', [AdminPromocaoController::class, 'alternarStatus']);
+
+    // ==================== ADMIN - NOTIFICAÇÕES ====================
+    Route::get('/notificacoes/templates', [AdminNotificacaoController::class, 'templates']);
+    Route::get('/notificacoes/estatisticas', [AdminNotificacaoController::class, 'estatisticas']);
+    Route::get('/notificacoes', [AdminNotificacaoController::class, 'index']);
+    Route::get('/notificacoes/{id}', [AdminNotificacaoController::class, 'show']);
+    Route::post('/notificacoes/enviar', [AdminNotificacaoController::class, 'enviar']);
+    Route::delete('/notificacoes/{id}', [AdminNotificacaoController::class, 'destroy']);
+    Route::put('/notificacoes/{id}/marcar-lida', [AdminNotificacaoController::class, 'marcarComoLida']);
+    Route::put('/notificacoes/marcar-todas-lidas', [AdminNotificacaoController::class, 'marcarTodasComoLidas']);
+
+    // ==================== ADMIN - BACKUPS ====================
+    Route::get('/backups/estatisticas', [AdminBackupController::class, 'estatisticas']);
+    Route::get('/backups', [AdminBackupController::class, 'index']);
+    Route::post('/backups', [AdminBackupController::class, 'store']);
+    Route::delete('/backups/{id}', [AdminBackupController::class, 'destroy']);
+    Route::get('/backups/{id}/download', [AdminBackupController::class, 'download']);
+    Route::post('/backups/{id}/restaurar', [AdminBackupController::class, 'restaurar']);
+    Route::get('/backups/configuracoes', [AdminBackupController::class, 'configuracoes']);
+    Route::put('/backups/configuracoes', [AdminBackupController::class, 'atualizarConfiguracoes']);
+    Route::delete('/backups/limpar', [AdminBackupController::class, 'limpar']);
+
+    // ==================== ADMIN - LOGS ====================
+    Route::get('/logs', [AdminLogController::class, 'index']);
+    Route::get('/logs/estatisticas', [AdminLogController::class, 'estatisticas']);
+    Route::delete('/logs/limpar', [AdminLogController::class, 'limpar']);
+    Route::get('/logs/exportar', [AdminLogController::class, 'exportar']);
+
+    // ==================== ADMIN - PERFORMANCE ====================
+    Route::get('/performance', [AdminPerformanceController::class, 'index']);
+    Route::get('/performance/realtime', [AdminPerformanceController::class, 'realtime']);
+    Route::get('/performance/historico', [AdminPerformanceController::class, 'historico']);
+
+    // ==================== ADMIN - MONITORAMENTO ====================
+    Route::get('/monitoramento/estatisticas', [AdminMonitoramentoController::class, 'estatisticas']);
+    Route::get('/monitoramento/status', [AdminMonitoramentoController::class, 'status']);
+    Route::get('/monitoramento/alertas', [AdminMonitoramentoController::class, 'alertas']);
+    Route::put('/monitoramento/alertas/{id}/ler', [AdminMonitoramentoController::class, 'marcarAlertaLido']);
+    Route::put('/monitoramento/alertas/marcar-todos-lidos', [AdminMonitoramentoController::class, 'marcarTodosAlertasLidos']);
+    Route::get('/monitoramento/logs', [AdminMonitoramentoController::class, 'logs']);
+    Route::delete('/monitoramento/logs/limpar', [AdminMonitoramentoController::class, 'limparLogs']);
+    Route::get('/monitoramento/metricas', [AdminMonitoramentoController::class, 'metricas']);
+    Route::get('/monitoramento/testar/{servico}', [AdminMonitoramentoController::class, 'testarServico']);
+
+    // ==================== ADMIN - SUPORTE ====================
+    Route::get('/suporte/estatisticas', [AdminSuporteController::class, 'estatisticas']);
+    Route::get('/suporte/tickets', [AdminSuporteController::class, 'index']);
+    Route::get('/suporte/tickets/{id}', [AdminSuporteController::class, 'show']);
+    Route::put('/suporte/tickets/{id}/status', [AdminSuporteController::class, 'atualizarStatus']);
+    Route::put('/suporte/tickets/{id}/prioridade', [AdminSuporteController::class, 'atualizarPrioridade']);
+    Route::delete('/suporte/tickets/{id}', [AdminSuporteController::class, 'destroy']);
+    Route::get('/suporte/tickets/{id}/mensagens', [AdminSuporteController::class, 'mensagens']);
+    Route::post('/suporte/tickets/{id}/mensagens', [AdminSuporteController::class, 'enviarMensagem']);
+    Route::put('/suporte/tickets/{id}/atribuir', [AdminSuporteController::class, 'atribuirAdmin']);
+
+    // ==================== ADMIN - CHAT ====================
+    Route::get('/suporte/chat/tickets', [AdminSuporteController::class, 'chatTickets']);
+    Route::get('/suporte/chat/tickets/{id}/mensagens', [AdminSuporteController::class, 'chatMensagens']);
+    Route::post('/suporte/chat/tickets/{id}/enviar', [AdminSuporteController::class, 'enviarChatMensagem']);
+    Route::get('/suporte/chat/tickets/{id}/novas', [AdminSuporteController::class, 'novasMensagensChat']);
+    Route::put('/suporte/chat/tickets/{id}/marcar-lidas', [AdminSuporteController::class, 'marcarChatLidas']);
+
+    // ==================== ADMIN - RELATÓRIOS ====================
+    Route::get('/relatorios/pedidos', [AdminRelatorioController::class, 'pedidos']);
+    Route::get('/relatorios/financeiro', [AdminRelatorioController::class, 'financeiro']);
+    Route::get('/relatorios/prestadores', [AdminRelatorioController::class, 'prestadores']);
+    Route::get('/relatorios/clientes', [AdminRelatorioController::class, 'clientes']);
+    Route::get('/relatorios/{tipo}/exportar', [AdminRelatorioController::class, 'exportar']);
+
+    // ==================== ADMIN - ESTATÍSTICAS ====================
+    Route::get('/estatisticas', [AdminEstatisticaController::class, 'index']);
+    Route::get('/estatisticas/{periodo}', [AdminEstatisticaController::class, 'porPeriodo']);
+    Route::get('/estatisticas/graficos', [AdminEstatisticaController::class, 'graficos']);
+
+    // ==================== ADMIN - PERFIL ====================
+    Route::get('/perfil', [AdminPerfilController::class, 'getPerfil']);
+    Route::put('/perfil', [AdminPerfilController::class, 'atualizarPerfil']);
+    Route::put('/perfil/senha', [AdminPerfilController::class, 'alterarSenha']);
+    Route::post('/perfil/foto', [AdminPerfilController::class, 'atualizarFoto']);
+    Route::get('/atividades', [AdminPerfilController::class, 'getAtividades']);
+
+    // ==================== ADMIN - CONFIGURAÇÕES ====================
+    Route::get('/configuracoes/todas', [AdminConfiguracoesController::class, 'getTodasConfiguracoes']);
+    Route::get('/configuracoes/gerais', [AdminConfiguracoesController::class, 'getConfiguracoesGerais']);
+    Route::put('/configuracoes/gerais', [AdminConfiguracoesController::class, 'atualizarConfiguracoesGerais']);
+    Route::get('/configuracoes/prestador', [AdminConfiguracoesController::class, 'getConfiguracoesPrestador']);
+    Route::put('/configuracoes/prestador', [AdminConfiguracoesController::class, 'atualizarConfiguracoesPrestador']);
+    Route::get('/configuracoes/pagamento', [AdminConfiguracoesController::class, 'getConfiguracoesPagamento']);
+    Route::put('/configuracoes/pagamento', [AdminConfiguracoesController::class, 'atualizarConfiguracoesPagamento']);
+
+    // Opções para selects
+    Route::get('/configuracoes/opcoes/raios', [AdminConfiguracoesController::class, 'getOpcoesRaios']);
+    Route::get('/configuracoes/opcoes/dias-semana', [AdminConfiguracoesController::class, 'getOpcoesDiasSemana']);
+    Route::get('/configuracoes/opcoes/documentos', [AdminConfiguracoesController::class, 'getOpcoesDocumentos']);
+    Route::get('/configuracoes/opcoes/fuso-horario', [AdminConfiguracoesController::class, 'getOpcoesFusoHorario']);
+    Route::get('/configuracoes/opcoes/moeda', [AdminConfiguracoesController::class, 'getOpcoesMoeda']);
+    Route::get('/configuracoes/opcoes/criptografia', [AdminConfiguracoesController::class, 'getOpcoesCriptografia']);
+    Route::get('/configuracoes/opcoes/modulos', [AdminConfiguracoesController::class, 'getOpcoesModulos']);
+
+    // ==================== ADMIN - PERMISSÕES ====================
+    Route::get('/permissoes', [AdminConfiguracoesController::class, 'getPermissoes']);
+    Route::get('/roles', [AdminConfiguracoesController::class, 'getRoles']);
+    Route::put('/permissoes/{id}', [AdminConfiguracoesController::class, 'atualizarPermissao']);
+    Route::put('/roles/{id}', [AdminConfiguracoesController::class, 'atualizarRole']);
+});
+
+// ==========================================
 // ROTAS DE TESTE
 // ==========================================
-
 Route::get('/health', function () {
     return response()->json([
         'status' => 'ok',
