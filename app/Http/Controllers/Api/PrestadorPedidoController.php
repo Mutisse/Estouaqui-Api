@@ -283,7 +283,7 @@ class PrestadorPedidoController extends BaseController
     }
 
     // ==========================================
-    // ✅ NOVOS MÉTODOS ADICIONADOS
+    // ✅ PEDIDOS DISPONÍVEIS E PROPOSTAS
     // ==========================================
 
     /**
@@ -420,7 +420,31 @@ class PrestadorPedidoController extends BaseController
         ]);
     }
 
-    // app/Http/Controllers/Api/PrestadorPedidoController.php
+    /**
+     * ✅ NOVO MÉTODO: GET /prestador/propostas/check/{pedidoId}
+     * Verifica se o prestador já enviou proposta para um pedido específico
+     */
+    public function verificarProposta(Request $request, $pedidoId)
+    {
+        $user = $request->user();
+
+        $proposta = Proposta::where('pedido_id', $pedidoId)
+            ->where('prestador_id', $user->id)
+            ->first();
+
+        // SEMPRE retorna 200, mesmo se não existir proposta
+        return response()->json([
+            'success' => true,
+            'enviou' => !is_null($proposta),
+            'proposta' => $proposta ? [
+                'id' => $proposta->id,
+                'valor' => $proposta->valor,
+                'mensagem' => $proposta->mensagem,
+                'status' => $proposta->status,
+                'created_at' => $proposta->created_at->toISOString(),
+            ] : null
+        ]);
+    }
 
     /**
      * GET /prestador/pedidos

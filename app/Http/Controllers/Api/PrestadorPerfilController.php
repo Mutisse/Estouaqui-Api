@@ -9,6 +9,7 @@ use App\Models\Servico;
 use App\Services\NotificationService;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 class PrestadorPerfilController extends BaseController
 {
@@ -20,6 +21,10 @@ class PrestadorPerfilController extends BaseController
         $user = $request->user();
         $profile = $user->prestadorProfile;
 
+        // Processar portfolio para URLs completas
+        $portfolio = $profile ? ($profile->portfolio ?? []) : [];
+        $portfolioUrls = $this->processPortfolioUrls($portfolio);
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -30,9 +35,9 @@ class PrestadorPerfilController extends BaseController
                 'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
                 'profissao' => $profile ? $profile->profissao : null,
                 'sobre' => $profile ? $profile->sobre : null,
-                'media_avaliacao' => $profile ? $profile->media_avaliacao : 0,
-                'total_avaliacoes' => $profile ? $profile->total_avaliacoes : 0,
-                'portfolio' => $profile ? ($profile->portfolio ?? []) : [],
+                'media_avaliacao' => $profile ? (float) $profile->media_avaliacao : 0,
+                'total_avaliacoes' => $profile ? (int) $profile->total_avaliacoes : 0,
+                'portfolio' => $portfolioUrls,
                 'disponibilidade' => $profile ? ($profile->disponibilidade ?? null) : null,
                 'documento_verificado' => $profile ? ($profile->status_documento === 'aprovado') : false,
             ]
@@ -74,7 +79,6 @@ class PrestadorPerfilController extends BaseController
             $profile->update($profileData);
         }
 
-        // 🔔 NOTIFICAÇÃO: Perfil atualizado
         NotificationService::send('sistema.perfil_atualizado', $user->id, [
             'nome' => $user->nome,
         ]);
@@ -94,27 +98,41 @@ class PrestadorPerfilController extends BaseController
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'foto' => 'required|image|max:5120'
+            'foto' => 'required|image|mimes:jpeg,png,jpg|max:5120'
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
+                'message' => 'Arquivo inválido. Use uma imagem JPG ou PNG de até 5MB.',
                 'errors' => $validator->errors()
             ], 422);
         }
 
         if ($request->hasFile('foto')) {
+            $file = $request->file('foto');
+
+            // Verificar tamanho novamente para garantir
+            if ($file->getSize() > 5 * 1024 * 1024) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'A imagem não pode ter mais que 5MB'
+                ], 422);
+            }
+
             // Remover foto antiga
             if ($user->foto) {
                 Storage::disk('public')->delete($user->foto);
             }
 
-            $path = $request->file('foto')->store('usuarios', 'public');
+            // Gerar nome único para o arquivo
+            $extension = $file->getClientOriginalExtension();
+            $filename = 'perfil_' . $user->id . '_' . time() . '.' . $extension;
+            $path = $file->storeAs('usuarios', $filename, 'public');
+
             $user->foto = $path;
             $user->save();
 
-            // 🔔 NOTIFICAÇÃO: Foto atualizada
             NotificationService::send('perfil.foto_atualizada', $user->id, [
                 'nome' => $user->nome,
             ]);
@@ -144,7 +162,6 @@ class PrestadorPerfilController extends BaseController
             $user->foto = null;
             $user->save();
 
-            // 🔔 NOTIFICAÇÃO: Foto removida
             NotificationService::send('perfil.foto_removida', $user->id, [
                 'nome' => $user->nome,
             ]);
@@ -174,7 +191,7 @@ class PrestadorPerfilController extends BaseController
             'data' => [
                 'servicos' => $servicosCount,
                 'pedidos_pendentes' => $pedidosPendentes,
-                'avaliacao_media' => $profile ? $profile->media_avaliacao : 0,
+                'avaliacao_media' => $profile ? (float) $profile->media_avaliacao : 0,
             ]
         ]);
     }
@@ -224,7 +241,6 @@ class PrestadorPerfilController extends BaseController
         if (!$user->categorias()->where('categoria_id', $request->categoria_id)->exists()) {
             $user->categorias()->attach($request->categoria_id);
 
-            // 🔔 NOTIFICAÇÃO: Categoria adicionada
             NotificationService::send('categoria.adicionada', $user->id, [
                 'categoria' => $categoria->nome,
             ]);
@@ -248,7 +264,6 @@ class PrestadorPerfilController extends BaseController
 
         $user->categorias()->detach($categoriaId);
 
-        // 🔔 NOTIFICAÇÃO: Categoria removida
         NotificationService::send('categoria.removida', $user->id, [
             'categoria' => $categoriaNome,
         ]);
@@ -301,7 +316,6 @@ class PrestadorPerfilController extends BaseController
         $profile->disponibilidade = $disponibilidade;
         $profile->save();
 
-        // 🔔 NOTIFICAÇÃO: Disponibilidade atualizada
         NotificationService::send('disponibilidade.atualizada', $user->id, [
             'nome' => $user->nome,
         ]);
@@ -313,15 +327,102 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
+    // ==========================================
+    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS E REFORÇADOS
+    // ==========================================
+
     /**
-     * POST /prestador/perfil/portfolio - Adicionar foto ao portfólio
+     * Helper: Processa URLs do portfólio
+     */
+    private function processPortfolioUrls(array $portfolio): array
+    {
+        $result = [];
+        foreach ($portfolio as $index => $item) {
+            if (is_string($item)) {
+                // Limpa o caminho
+                $path = $this->cleanStoragePath($item);
+
+                $result[] = [
+                    'id' => $index + 1,
+                    'url' => asset('storage/' . $path),
+                    'path' => $path,
+                    'titulo' => '',
+                    'descricao' => '',
+                    'created_at' => now()->toISOString()
+                ];
+            } elseif (is_array($item)) {
+                if (isset($item['path'])) {
+                    $path = $this->cleanStoragePath($item['path']);
+                    $item['url'] = asset('storage/' . $path);
+                } elseif (isset($item['url'])) {
+                    // Se já tem URL, mantém
+                }
+                $result[] = $item;
+            }
+        }
+        return $result;
+    }
+
+    /**
+     * Helper: Limpa o caminho do storage
+     */
+    private function cleanStoragePath(string $path): string
+    {
+        // Remove prefixes duplicados
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = ltrim($path, '/');
+        return $path;
+    }
+
+    /**
+     * GET /prestador/portfolio - Buscar todas as fotos do portfólio
+     */
+    public function getPortfolio(Request $request)
+    {
+        $user = $request->user();
+        $profile = $user->prestadorProfile;
+
+        $portfolio = $profile ? ($profile->portfolio ?? []) : [];
+
+        $portfolioItems = [];
+        foreach ($portfolio as $index => $item) {
+            if (is_string($item)) {
+                $path = ltrim($item, '/');
+                // Força URL absoluta
+                $url = url('/storage/' . $path);
+
+                $portfolioItems[] = [
+                    'id' => $index + 1,
+                    'url' => $url,
+                    'path' => $path,
+                    'titulo' => '',
+                    'descricao' => '',
+                    'created_at' => now()->toISOString()
+                ];
+            } else {
+                $portfolioItems[] = $item;
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => $portfolioItems
+        ]);
+    }
+
+    /**
+     * POST /prestador/portfolio - Adicionar foto ao portfólio
      */
     public function addPortfolio(Request $request)
     {
         $user = $request->user();
 
         $validator = Validator::make($request->all(), [
-            'foto' => 'required|image|max:5120'
+            'foto' => 'required|image|mimes:jpeg,png,jpg|max:5120',
+            'titulo' => 'nullable|string|max:255',
+            'descricao' => 'nullable|string|max:500'
         ]);
 
         if ($validator->fails()) {
@@ -333,14 +434,28 @@ class PrestadorPerfilController extends BaseController
 
         $profile = $user->prestadorProfile()->firstOrCreate(['user_id' => $user->id]);
 
-        $path = $request->file('foto')->store('portfolio/' . $user->id, 'public');
+        // Upload da imagem
+        $file = $request->file('foto');
+        $extension = $file->getClientOriginalExtension();
+        $filename = Str::random(40) . '.' . $extension;
+        $path = $file->storeAs('portfolio/' . $user->id, $filename, 'public');
 
         $portfolio = $profile->portfolio ?? [];
-        $portfolio[] = $path;
+
+        // Adicionar com estrutura de objeto
+        $newItem = [
+            'id' => time() . rand(1000, 9999),
+            'url' => asset('storage/' . $path),
+            'path' => $path,
+            'titulo' => $request->input('titulo', ''),
+            'descricao' => $request->input('descricao', ''),
+            'created_at' => now()->toISOString()
+        ];
+
+        $portfolio[] = $newItem;
         $profile->portfolio = $portfolio;
         $profile->save();
 
-        // 🔔 NOTIFICAÇÃO: Foto adicionada ao portfólio
         NotificationService::send('portfolio.foto_adicionada', $user->id, [
             'nome' => $user->nome,
         ]);
@@ -348,27 +463,16 @@ class PrestadorPerfilController extends BaseController
         return response()->json([
             'success' => true,
             'message' => 'Foto adicionada ao portfólio',
-            'data' => ['url' => asset('storage/' . $path)]
+            'data' => $newItem
         ]);
     }
 
     /**
-     * DELETE /prestador/perfil/portfolio - Remover foto do portfólio
+     * DELETE /prestador/portfolio/{id} - Remover foto do portfólio por ID
      */
-    public function removePortfolio(Request $request)
+    public function removePortfolio(Request $request, $id)
     {
         $user = $request->user();
-
-        $validator = Validator::make($request->all(), [
-            'url' => 'required|string'
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'errors' => $validator->errors()
-            ], 422);
-        }
 
         $profile = $user->prestadorProfile;
         if (!$profile) {
@@ -379,28 +483,52 @@ class PrestadorPerfilController extends BaseController
         }
 
         $portfolio = $profile->portfolio ?? [];
-        $url = $request->url;
-        $path = str_replace(asset('storage/'), '', $url);
 
-        $index = array_search($path, $portfolio);
-        if ($index !== false) {
-            unset($portfolio[$index]);
-            $profile->portfolio = array_values($portfolio);
-            $profile->save();
+        // Encontrar o item pelo ID
+        $itemEncontrado = null;
+        $indexEncontrado = -1;
 
-            Storage::disk('public')->delete($path);
-
-            // 🔔 NOTIFICAÇÃO: Foto removida do portfólio
-            NotificationService::send('portfolio.foto_removida', $user->id, [
-                'nome' => $user->nome,
-            ]);
+        foreach ($portfolio as $index => $item) {
+            if (isset($item['id']) && (string) $item['id'] === (string) $id) {
+                $itemEncontrado = $item;
+                $indexEncontrado = $index;
+                break;
+            }
         }
+
+        if ($indexEncontrado === -1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Foto não encontrada no portfólio'
+            ], 404);
+        }
+
+        // Remover o arquivo físico se existir
+        if (isset($itemEncontrado['path'])) {
+            $cleanPath = $this->cleanStoragePath($itemEncontrado['path']);
+            if (Storage::disk('public')->exists($cleanPath)) {
+                Storage::disk('public')->delete($cleanPath);
+            }
+        }
+
+        // Remover do array
+        array_splice($portfolio, $indexEncontrado, 1);
+        $profile->portfolio = $portfolio;
+        $profile->save();
+
+        NotificationService::send('portfolio.foto_removida', $user->id, [
+            'nome' => $user->nome,
+        ]);
 
         return response()->json([
             'success' => true,
             'message' => 'Foto removida do portfólio'
         ]);
     }
+
+    // ==========================================
+    // SERVIÇOS
+    // ==========================================
 
     /**
      * POST /prestador/servicos - Criar serviço
@@ -434,7 +562,6 @@ class PrestadorPerfilController extends BaseController
             'ativo' => true,
         ]);
 
-        // 🔔 NOTIFICAÇÃO: Serviço criado
         NotificationService::send('servico.criado', $user->id, [
             'nome' => $servico->nome,
         ]);
@@ -479,7 +606,6 @@ class PrestadorPerfilController extends BaseController
 
         $servico->update($request->only(['nome', 'descricao', 'preco', 'duracao', 'icone']));
 
-        // 🔔 NOTIFICAÇÃO: Serviço atualizado
         NotificationService::send('servico.atualizado', $user->id, [
             'nome' => $servico->nome,
         ]);
@@ -510,7 +636,6 @@ class PrestadorPerfilController extends BaseController
         $servicoNome = $servico->nome;
         $servico->delete();
 
-        // 🔔 NOTIFICAÇÃO: Serviço removido
         NotificationService::send('servico.removido', $user->id, [
             'nome' => $servicoNome,
         ]);
@@ -546,9 +671,27 @@ class PrestadorPerfilController extends BaseController
     {
         $user = $request->user();
 
+        // Excluir portfólio físico
+        $profile = $user->prestadorProfile;
+        if ($profile && $profile->portfolio) {
+            foreach ($profile->portfolio as $item) {
+                if (isset($item['path'])) {
+                    $cleanPath = $this->cleanStoragePath($item['path']);
+                    if (Storage::disk('public')->exists($cleanPath)) {
+                        Storage::disk('public')->delete($cleanPath);
+                    }
+                }
+            }
+        }
+
         // Excluir perfil do prestador
-        if ($user->prestadorProfile) {
-            $user->prestadorProfile->delete();
+        if ($profile) {
+            $profile->delete();
+        }
+
+        // Excluir foto de perfil
+        if ($user->foto) {
+            Storage::disk('public')->delete($user->foto);
         }
 
         // Excluir endereços

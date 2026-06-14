@@ -223,4 +223,57 @@ class ConfiguracaoController extends Controller
             ], 500);
         }
     }
+
+    // ==========================================
+    // MÉTODOS PARA AS ROTAS DO FRONTEND
+    // ==========================================
+
+    /**
+     * GET /api/configuracoes/raio-options
+     */
+    public function getRaioOptions()
+    {
+        $config = Configuracoes::where('chave', 'raio_options')->firstOrFail();
+
+        // 🔥 DECODIFICA o JSON para ARRAY
+        $data = json_decode($config->valor, true);
+
+        return response()->json([
+            'success' => true,
+            'data' => $data  // Agora é array, não string!
+        ]);
+    }
+
+    public function getOrdenacaoOptions()
+    {
+        $config = Configuracoes::where('chave', 'ordenacao_options')->firstOrFail();
+
+        // 🔥 DECODIFICA o JSON para ARRAY
+        $data = json_decode($config->valor, true);
+
+        return response()->json([
+            'success' => true,
+            'data' => $data  // Agora é array, não string!
+        ]);
+    }
+
+
+
+    /**
+     * GET /api/configuracoes/{chave}
+     */
+    public function show($chave)
+    {
+        $config = Configuracoes::where('chave', $chave)->firstOrFail();
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'chave' => $config->chave,
+                'valor' => $config->valor,
+                'grupo' => $config->grupo,
+                'descricao' => $config->descricao
+            ]
+        ]);
+    }
 }

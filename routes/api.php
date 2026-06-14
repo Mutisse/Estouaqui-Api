@@ -21,6 +21,9 @@ use App\Http\Controllers\Api\PrestadorNotificacaoController;
 use App\Http\Controllers\Api\PrestadorChatController;
 use App\Http\Controllers\Api\ConfiguracaoController;
 use App\Http\Controllers\Api\PrestadorPreferenciaController;
+use App\Http\Controllers\Api\PrestadorRelatorioController;
+use App\Http\Controllers\Api\ClienteSuporteController;
+use App\Http\Controllers\Api\PrestadorSuporteController;
 
 // ==================== CONTROLLERS ADMIN ====================
 use App\Http\Controllers\Admin\AdminAvaliacaoController;
@@ -44,6 +47,7 @@ use App\Http\Controllers\Admin\AdminPerfilController;
 use App\Http\Controllers\Admin\AdminConfiguracoesController;
 
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\File;
 
 /*
 |--------------------------------------------------------------------------
@@ -67,7 +71,7 @@ Route::get('/categorias', [CategoriaController::class, 'index']);
 Route::get('/categorias/{id}', [CategoriaController::class, 'show']);
 
 // ==========================================
-// ROTAS DE CONFIGURAÇÕES PÚBLICAS (CORRIGIDAS)
+// ROTAS DE CONFIGURAÇÕES PÚBLICAS
 // ==========================================
 Route::prefix('/configuracoes')->group(function () {
     // Rotas específicas primeiro
@@ -75,6 +79,8 @@ Route::prefix('/configuracoes')->group(function () {
     Route::get('/cliente', [ConfiguracaoController::class, 'getClienteConfig']);
     Route::get('/sistema', [ConfiguracaoController::class, 'getSistemaConfig']);
     Route::get('/grupo/{grupo}', [ConfiguracaoController::class, 'getByGroup']);
+    Route::get('/raio-options', [ConfiguracaoController::class, 'getRaioOptions']);
+    Route::get('/ordenacao-options', [ConfiguracaoController::class, 'getOrdenacaoOptions']);
 
     // Rotas com parâmetros depois
     Route::get('/{chave}', [ConfiguracaoController::class, 'show']);
@@ -197,8 +203,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::put('/solicitacoes/{id}/iniciar', [PrestadorPedidoController::class, 'iniciarServico']);
         Route::put('/solicitacoes/{id}/concluir', [PrestadorPedidoController::class, 'concluirServico']);
         Route::put('/solicitacoes/{id}/cancelar', [PrestadorPedidoController::class, 'cancelar']);
+
+        // ⭐ PEDIDOS DISPONÍVEIS E PROPOSTAS
         Route::get('/pedidos-disponiveis', [PrestadorPedidoController::class, 'pedidosDisponiveis']);
         Route::post('/propostas', [PrestadorPedidoController::class, 'enviarProposta']);
+        Route::get('/propostas', [PrestadorPedidoController::class, 'minhasPropostas']);
+        Route::get('/propostas/check/{pedidoId}', [PrestadorPedidoController::class, 'verificarProposta']);
+
         Route::get('/pedidos', [PrestadorPedidoController::class, 'historico']);
         Route::get('/avaliacoes', [PrestadorPedidoController::class, 'avaliacoes']);
 
@@ -232,8 +243,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::delete('/perfil/categorias/{id}', [PrestadorPerfilController::class, 'removeCategoria']);
         Route::get('/perfil/disponibilidade', [PrestadorPerfilController::class, 'getDisponibilidade']);
         Route::put('/perfil/disponibilidade', [PrestadorPerfilController::class, 'updateDisponibilidade']);
-        Route::post('/perfil/portfolio', [PrestadorPerfilController::class, 'addPortfolio']);
-        Route::delete('/perfil/portfolio', [PrestadorPerfilController::class, 'removePortfolio']);
+
+        // ⭐ PORTFOLIO
+        Route::get('/portfolio', [PrestadorPerfilController::class, 'getPortfolio']);
+        Route::post('/portfolio', [PrestadorPerfilController::class, 'addPortfolio']);
+        Route::delete('/portfolio/{id}', [PrestadorPerfilController::class, 'removePortfolio']);
 
         // Notificações Prestador
         Route::get('/notificacoes', [PrestadorNotificacaoController::class, 'index']);
@@ -254,8 +268,35 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::delete('/preferencias/mpesa', [PrestadorPreferenciaController::class, 'removerMpesa']);
         Route::delete('/preferencias/conta', [PrestadorPreferenciaController::class, 'removerConta']);
 
+        // Relatório Financeiro
+        Route::get('/relatorio-financeiro', [PrestadorRelatorioController::class, 'index']);
+
         // Excluir conta
         Route::delete('/perfil/conta', [PrestadorPerfilController::class, 'deleteAccount']);
+    });
+
+    // ==========================================
+    // ⭐ ROTAS DE SUPORTE (Cliente e Prestador)
+    // ==========================================
+
+    // Rotas de Suporte para CLIENTE
+    Route::prefix('/cliente/suporte')->group(function () {
+        Route::get('/tickets', [ClienteSuporteController::class, 'index']);
+        Route::get('/tickets/{id}', [ClienteSuporteController::class, 'show']);
+        Route::get('/tickets/{id}/mensagens', [ClienteSuporteController::class, 'mensagens']);
+        Route::post('/tickets', [ClienteSuporteController::class, 'store']);
+        Route::post('/tickets/{id}/mensagens', [ClienteSuporteController::class, 'enviarMensagem']);
+        Route::put('/tickets/{id}/fechar', [ClienteSuporteController::class, 'fechar']);
+    });
+
+    // Rotas de Suporte para PRESTADOR
+    Route::prefix('/prestador/suporte')->group(function () {
+        Route::get('/tickets', [PrestadorSuporteController::class, 'index']);
+        Route::get('/tickets/{id}', [PrestadorSuporteController::class, 'show']);
+        Route::get('/tickets/{id}/mensagens', [PrestadorSuporteController::class, 'mensagens']);
+        Route::post('/tickets', [PrestadorSuporteController::class, 'store']);
+        Route::post('/tickets/{id}/mensagens', [PrestadorSuporteController::class, 'enviarMensagem']);
+        Route::put('/tickets/{id}/fechar', [PrestadorSuporteController::class, 'fechar']);
     });
 });
 
@@ -468,3 +509,16 @@ Route::get('/health', function () {
         'message' => 'API EstouAqui está funcionando!'
     ]);
 });
+
+// ==========================================
+// ROTA PARA ARQUIVOS DE STORAGE
+// ==========================================
+Route::get('/storage/{path}', function ($path) {
+    $fullPath = storage_path('app/public/' . $path);
+
+    if (!File::exists($fullPath)) {
+        abort(404);
+    }
+
+    return response()->file($fullPath);
+})->where('path', '.*');
