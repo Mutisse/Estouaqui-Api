@@ -25,20 +25,9 @@ COPY . .
 # Install dependencies
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# ========== NOVAS LINHAS ADICIONADAS ==========
-# Forçar HTTPS nas URLs geradas pela aplicação
+# ========== SÓ ISSO ==========
 ENV APP_URL=https://estouaqui-api.onrender.com
-ENV ASSET_URL=https://estouaqui-api.onrender.com
-
-# Limpar cache de configuração antigo (REMOVI O cache:clear que estava dando erro)
-RUN php artisan config:clear
-RUN php artisan optimize:clear
-
-# Recriar cache com as novas configurações (sem usar cache:clear)
-RUN php artisan config:cache
-RUN php artisan route:cache
-RUN php artisan view:cache
-# ===============================================
+# ==============================
 
 # Set permissions
 RUN chown -R www-data:www-data storage bootstrap/cache
