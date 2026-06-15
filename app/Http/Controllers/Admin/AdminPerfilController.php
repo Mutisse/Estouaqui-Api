@@ -36,7 +36,7 @@ class AdminPerfilController extends Controller
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone ?? '',
-                'foto' => $user->foto ? asset($user->foto) : null,
+                'foto' => $user->foto ? url($user->foto) : null,
                 'tipo' => $user->tipo ?? 'admin',
                 'verificado' => (bool) ($user->verificado ?? false),
                 'created_at' => $user->created_at,
@@ -227,39 +227,30 @@ class AdminPerfilController extends Controller
                 ], 404);
             }
 
-            // Remover foto antiga se existir
+            // Remover foto antiga
             if ($userModel->foto) {
-                $oldPath = str_replace('/storage/', '', $userModel->foto);
-                $oldPath = str_replace(asset('/storage/'), '', $oldPath);
-                $oldPath = ltrim($oldPath, '/');
-
+                $oldPath = str_replace('storage/', '', $userModel->foto);
                 if (Storage::disk('public')->exists($oldPath)) {
                     Storage::disk('public')->delete($oldPath);
                 }
             }
 
+            // Salvar nova foto
             $file = $request->file('foto');
             $path = $file->store('perfil-fotos', 'public');
 
-            // Usar asset para URL completa
-            $fotoUrl = asset('storage/' . $path);
-
-            $userModel->foto = $fotoUrl;
+            // 🔥 AQUI É A CORREÇÃO - Salvar apenas o caminho relativo
+            $userModel->foto = 'storage/' . $path;
             $userModel->save();
 
-            $this->registrarAtividade('atualizacao', 'Foto de perfil atualizada');
+            // Gerar URL completa para retornar
+            $fotoUrl = url($userModel->foto);
 
             return response()->json([
                 'success' => true,
                 'foto' => $fotoUrl,
                 'message' => 'Foto atualizada com sucesso'
             ]);
-        } catch (\Illuminate\Validation\ValidationException $e) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Erro de validação',
-                'errors' => $e->errors()
-            ], 422);
         } catch (\Exception $e) {
             Log::error('Erro em atualizarFoto: ' . $e->getMessage());
             return response()->json([

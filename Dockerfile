@@ -25,6 +25,9 @@ COPY . .
 # Install dependencies
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
+# 🔥 LINHA ADICIONADA - CRIAR LINK SIMBÓLICO DO STORAGE 🔥
+RUN php artisan storage:link
+
 # ========== SÓ ISSO ==========
 ENV APP_URL=https://estouaqui-api.onrender.com
 # ==============================
