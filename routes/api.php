@@ -510,3 +510,17 @@ Route::get('/health', function () {
     ]);
 });
 
+
+// ==========================================
+// ROTA ESPECÍFICA PARA SERVIR IMAGENS DO STORAGE
+// ==========================================
+Route::get('/imagem/{caminho}', function ($caminho) {
+    $fullPath = storage_path('app/public/' . $caminho);
+
+    if (!File::exists($fullPath)) {
+        // Retorna um erro 404 JSON, que é mais amigável para a API
+        return response()->json(['message' => 'Imagem não encontrada'], 404);
+    }
+
+    return response()->file($fullPath);
+})->where('caminho', '.*');
