@@ -11,11 +11,12 @@ use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 class PerfilController extends BaseController
 {
     /**
-     * GET /api/perfil
+     * GET /cliente/perfil
      * Obter dados do perfil do usuário logado (INCLUINDO ENDEREÇO)
      */
     public function show(Request $request)
@@ -46,7 +47,6 @@ class PerfilController extends BaseController
                 'sobre' => $user->sobre,
                 'media_avaliacao' => $user->media_avaliacao,
                 'total_avaliacoes' => $user->total_avaliacoes,
-                // ✅ ADICIONADO: Endereço do usuário
                 'endereco' => $enderecoPrincipal ? [
                     'id' => $enderecoPrincipal->id,
                     'rua' => $enderecoPrincipal->rua,
@@ -63,7 +63,7 @@ class PerfilController extends BaseController
     }
 
     /**
-     * PUT /api/perfil
+     * PUT /cliente/perfil
      * Atualizar dados do perfil (INCLUINDO ENDEREÇO)
      */
     public function update(Request $request)
@@ -76,7 +76,6 @@ class PerfilController extends BaseController
             'telefone' => 'sometimes|string|unique:users,telefone,' . $user->id,
             'profissao' => 'sometimes|string|max:255',
             'sobre' => 'sometimes|string|max:1000',
-            // ✅ VALIDAÇÃO DO ENDEREÇO
             'endereco' => 'sometimes|array',
             'endereco.rua' => 'nullable|string|max:255',
             'endereco.numero' => 'nullable|string|max:20',
@@ -110,18 +109,15 @@ class PerfilController extends BaseController
 
         $user->save();
 
-        // ✅ ATUALIZAR ENDEREÇO
+        // Atualizar ENDEREÇO
         if ($request->has('endereco') && $request->endereco) {
             $enderecoData = $request->endereco;
 
-            // Buscar endereço principal ou criar um novo
             $endereco = $user->enderecos()->where('principal', true)->first();
 
             if (!$endereco) {
-                // Se não existir endereço, cria um novo como principal
                 $endereco = $user->enderecos()->create(array_merge($enderecoData, ['principal' => true]));
             } else {
-                // Atualiza o endereço existente
                 $endereco->update($enderecoData);
             }
         }
@@ -130,7 +126,6 @@ class PerfilController extends BaseController
             'nome' => $user->nome
         ]);
 
-        // Retornar o perfil atualizado COM O ENDEREÇO
         $enderecoPrincipal = $user->enderecos()->where('principal', true)->first();
 
         return response()->json([
@@ -145,7 +140,6 @@ class PerfilController extends BaseController
                 'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
                 'profissao' => $user->profissao,
                 'sobre' => $user->sobre,
-                // ✅ RETORNAR ENDEREÇO ATUALIZADO
                 'endereco' => $enderecoPrincipal ? [
                     'id' => $enderecoPrincipal->id,
                     'rua' => $enderecoPrincipal->rua,
@@ -162,22 +156,60 @@ class PerfilController extends BaseController
     }
 
     /**
-     * POST /api/perfil/foto
-     * Atualizar foto do perfil
+     * POST /cliente/perfil/foto
+     * Atualizar foto do perfil - CORRIGIDO
      */
     public function uploadFoto(Request $request)
     {
         $user = $request->user();
 
-        $request->validate([
-            'foto' => 'required|image|max:5120|mimes:jpeg,png,jpg,gif'
-        ]);
+        // 🔥 LOG PARA DIAGNÓSTICO
+        Log::info('📸 Upload de foto iniciado para usuário: ' . $user->id);
+        Log::info('Has file? ' . ($request->hasFile('foto') ? 'SIM' : 'NÃO'));
 
-        if ($user->foto) {
-            Storage::disk('public')->delete($user->foto);
+        if ($request->hasFile('foto')) {
+            $file = $request->file('foto');
+            Log::info('File details:', [
+                'name' => $file->getClientOriginalName(),
+                'size' => $file->getSize(),
+                'mime' => $file->getMimeType(),
+                'error' => $file->getError(),
+            ]);
         }
 
-        $path = $request->file('foto')->store('usuarios', 'public');
+        // 🔥 VALIDAÇÃO CORRIGIDA
+        try {
+            $validated = $request->validate([
+                'foto' => 'required|image|max:5120|mimes:jpeg,png,jpg,gif'
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            Log::error('❌ Erro de validação da foto:', $e->errors());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao validar a foto',
+                'errors' => $e->errors()
+            ], 422);
+        }
+
+        // 🔥 REMOVER FOTO ANTIGA
+        if ($user->foto) {
+            $oldPath = str_replace('storage/', '', $user->foto);
+            $oldPath = str_replace(asset('storage/'), '', $oldPath);
+            $oldPath = ltrim($oldPath, '/');
+
+            if (Storage::disk('public')->exists($oldPath)) {
+                Storage::disk('public')->delete($oldPath);
+                Log::info('🗑️ Foto antiga removida: ' . $oldPath);
+            }
+        }
+
+        // 🔥 SALVAR NOVA FOTO
+        $file = $request->file('foto');
+        $path = $file->store('usuarios', 'public');
+
+        Log::info('📁 Foto salva em: ' . $path);
+
+        // 🔥 SALVAR APENAS O CAMINHO RELATIVO
         $user->foto = $path;
         $user->save();
 
@@ -185,17 +217,20 @@ class PerfilController extends BaseController
             'nome' => $user->nome
         ]);
 
+        // 🔥 RETORNAR URL COMPLETA
+        $fotoUrl = asset('storage/' . $path);
+
         return response()->json([
             'success' => true,
             'message' => 'Foto atualizada com sucesso!',
             'data' => [
-                'foto' => asset('storage/' . $path)
+                'foto' => $fotoUrl
             ]
         ]);
     }
 
     /**
-     * DELETE /api/perfil/foto
+     * DELETE /cliente/perfil/foto
      * Remover foto do perfil
      */
     public function removerFoto(Request $request)
@@ -203,7 +238,15 @@ class PerfilController extends BaseController
         $user = $request->user();
 
         if ($user->foto) {
-            Storage::disk('public')->delete($user->foto);
+            $path = str_replace('storage/', '', $user->foto);
+            $path = str_replace(asset('storage/'), '', $path);
+            $path = ltrim($path, '/');
+
+            if (Storage::disk('public')->exists($path)) {
+                Storage::disk('public')->delete($path);
+                Log::info('🗑️ Foto removida: ' . $path);
+            }
+
             $user->foto = null;
             $user->save();
         }
@@ -215,7 +258,7 @@ class PerfilController extends BaseController
     }
 
     /**
-     * GET /api/perfil/dashboard
+     * GET /cliente/perfil/dashboard
      * Obter estatísticas do usuário
      */
     public function dashboard(Request $request)
@@ -243,10 +286,10 @@ class PerfilController extends BaseController
         ]);
     }
 
-    // ===================== ENDEREÇOS (ADAPTADO PARA MOÇAMBIQUE) =====================
+    // ===================== ENDEREÇOS =====================
 
     /**
-     * GET /api/perfil/enderecos
+     * GET /cliente/enderecos
      * Listar endereços do usuário
      */
     public function getEnderecos(Request $request)
@@ -261,8 +304,8 @@ class PerfilController extends BaseController
     }
 
     /**
-     * POST /api/perfil/enderecos
-     * Adicionar novo endereço (adaptado para Moçambique)
+     * POST /cliente/enderecos
+     * Adicionar novo endereço
      */
     public function storeEndereco(Request $request)
     {
@@ -293,8 +336,8 @@ class PerfilController extends BaseController
     }
 
     /**
-     * PUT /api/perfil/enderecos/{id}
-     * Atualizar endereço (adaptado para Moçambique)
+     * PUT /cliente/enderecos/{id}
+     * Atualizar endereço
      */
     public function updateEndereco(Request $request, $id)
     {
@@ -337,7 +380,7 @@ class PerfilController extends BaseController
     }
 
     /**
-     * PUT /api/perfil/enderecos/{id}/principal
+     * PUT /cliente/enderecos/{id}/principal
      * Definir endereço como principal
      */
     public function setEnderecoPrincipal(Request $request, $id)
@@ -363,7 +406,7 @@ class PerfilController extends BaseController
     }
 
     /**
-     * DELETE /api/perfil/enderecos/{id}
+     * DELETE /cliente/enderecos/{id}
      * Remover endereço
      */
     public function deleteEndereco(Request $request, $id)
@@ -389,7 +432,7 @@ class PerfilController extends BaseController
     // ===================== CONFIGURAÇÕES =====================
 
     /**
-     * GET /api/perfil/configuracoes
+     * GET /cliente/configuracoes
      * Obter configurações do usuário
      */
     public function getConfiguracoes(Request $request)
@@ -410,7 +453,7 @@ class PerfilController extends BaseController
     }
 
     /**
-     * PUT /api/perfil/configuracoes
+     * PUT /cliente/configuracoes
      * Atualizar configurações do usuário
      */
     public function updateConfiguracoes(Request $request)

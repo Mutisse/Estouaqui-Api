@@ -1,36 +1,42 @@
 <?php
-// app/Models/Proposta.php
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Proposta extends Model
 {
-    use HasFactory;
-
-    protected $table = 'propostas';
-
     protected $fillable = [
         'pedido_id',
         'prestador_id',
+        'servico_id',
         'valor',
+        'duracao',
+        'endereco',
         'mensagem',
-        'status'
+        'status',
+        'expira_em',
     ];
 
     protected $casts = [
         'valor' => 'decimal:2',
+        'duracao' => 'integer',
+        'expira_em' => 'datetime',
     ];
 
-    public function pedido()
+    public function pedido(): BelongsTo
     {
         return $this->belongsTo(Pedido::class);
     }
 
-    public function prestador()
+    public function prestador(): BelongsTo
     {
         return $this->belongsTo(User::class, 'prestador_id');
+    }
+
+    public function servico(): BelongsTo
+    {
+        return $this->belongsTo(Servico::class);
     }
 }

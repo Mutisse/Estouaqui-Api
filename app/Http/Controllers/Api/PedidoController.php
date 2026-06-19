@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 
 class PedidoController extends BaseController
 {
@@ -20,9 +21,16 @@ class PedidoController extends BaseController
         $user = $request->user();
 
         $pedidos = Pedido::where('cliente_id', $user->id)
-            ->with('categoria')
+            ->with(['categoria', 'prestador'])
             ->orderBy('created_at', 'desc')
             ->get();
+
+        // ✅ CORRIGIR URL DA FOTO
+        $pedidos->each(function ($pedido) {
+            if ($pedido->foto) {
+                $pedido->foto = asset('storage/' . $pedido->foto);
+            }
+        });
 
         return response()->json([
             'success' => true,
@@ -30,10 +38,6 @@ class PedidoController extends BaseController
         ]);
     }
 
-    /**
-     * Mostrar detalhes de um pedido específico
-     * GET /api/cliente/pedidos/{id}
-     */
     /**
      * Mostrar detalhes de um pedido específico
      * GET /api/cliente/pedidos/{id}
@@ -65,17 +69,22 @@ class PedidoController extends BaseController
             'data' => $pedido
         ]);
     }
+
     /**
      * Criar um novo pedido
      * POST /api/cliente/pedidos
+     * ✅ ATUALIZADO: Suporte a latitude e longitude
      */
     public function store(Request $request)
     {
+        // ✅ VALIDAÇÃO COM LATITUDE E LONGITUDE
         $request->validate([
             'categoria_id' => 'required|exists:categorias,id',
             'descricao' => 'required|string|min:10',
             'endereco' => 'required|string',
             'foto' => 'nullable|image|max:5120',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
         ]);
 
         $user = $request->user();
@@ -88,12 +97,27 @@ class PedidoController extends BaseController
             'status' => 'pendente',
         ];
 
+        // ✅ SALVAR LATITUDE E LONGITUDE
+        if ($request->has('latitude') && $request->latitude !== null) {
+            $dados['latitude'] = $request->latitude;
+        }
+        if ($request->has('longitude') && $request->longitude !== null) {
+            $dados['longitude'] = $request->longitude;
+        }
+
         if ($request->hasFile('foto')) {
             $path = $request->file('foto')->store('pedidos', 'public');
             $dados['foto'] = $path;
         }
 
         $pedido = Pedido::create($dados);
+
+        // ✅ LOG PARA VERIFICAR SE AS COORDENADAS FORAM SALVAS
+        Log::info('Pedido criado', [
+            'pedido_id' => $pedido->id,
+            'latitude' => $pedido->latitude,
+            'longitude' => $pedido->longitude,
+        ]);
 
         NotificationService::send('pedido.criado', $user->id, [
             'numero' => $pedido->numero,
@@ -115,7 +139,10 @@ class PedidoController extends BaseController
                 [
                     'numero' => $pedido->numero,
                     'categoria' => $pedido->categoria->nome ?? 'serviço',
-                    'descricao' => substr($pedido->descricao, 0, 50)
+                    'descricao' => substr($pedido->descricao, 0, 50),
+                    // ✅ ENVIAR LOCALIZAÇÃO NAS NOTIFICAÇÕES
+                    'latitude' => $pedido->latitude,
+                    'longitude' => $pedido->longitude,
                 ]
             );
         }
@@ -244,6 +271,11 @@ class PedidoController extends BaseController
             ], 422);
         }
 
+        // ✅ REMOVER FOTO AO DELETAR
+        if ($pedido->foto) {
+            Storage::disk('public')->delete($pedido->foto);
+        }
+
         $pedido->delete();
 
         return response()->json([
@@ -271,6 +303,13 @@ class PedidoController extends BaseController
             ->with(['cliente', 'categoria'])
             ->orderBy('created_at', 'desc')
             ->get();
+
+        // ✅ CORRIGIR URL DA FOTO
+        $pedidos->each(function ($pedido) {
+            if ($pedido->foto) {
+                $pedido->foto = asset('storage/' . $pedido->foto);
+            }
+        });
 
         return response()->json([
             'success' => true,
@@ -300,6 +339,13 @@ class PedidoController extends BaseController
             ->with(['cliente', 'categoria'])
             ->orderBy('created_at', 'desc')
             ->get();
+
+        // ✅ CORRIGIR URL DA FOTO E INCLUIR LOCALIZAÇÃO
+        $pedidos->each(function ($pedido) {
+            if ($pedido->foto) {
+                $pedido->foto = asset('storage/' . $pedido->foto);
+            }
+        });
 
         return response()->json([
             'success' => true,

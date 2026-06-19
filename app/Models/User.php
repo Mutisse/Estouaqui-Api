@@ -384,21 +384,20 @@ class User extends Authenticatable
 
 
 
-// Adicionar o relacionamento
-public function role()
-{
-    return $this->belongsTo(Role::class);
-}
+    // Adicionar o relacionamento
+    public function role()
+    {
+        return $this->belongsTo(Role::class);
+    }
 
-// Adicionar métodos auxiliares
-public function hasRole($roleName): bool
-{
-    return $this->role?->nome === $roleName;
-}
+    // Adicionar métodos auxiliares
+    public function hasRole($roleName): bool
+    {
+        return $this->role?->nome === $roleName;
+    }
 
-public function isRoot(): bool
-{
-    return $this->hasRole('root');
-}
-
+    public function isRoot(): bool
+    {
+        return $this->hasRole('root');
+    }
 }

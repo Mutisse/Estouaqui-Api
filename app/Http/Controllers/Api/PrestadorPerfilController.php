@@ -15,6 +15,13 @@ class PrestadorPerfilController extends BaseController
 {
     /**
      * GET /prestador/perfil - Buscar perfil completo
+     *
+     * 🔥 RETORNA TODOS OS DADOS DO PRESTADOR:
+     * - Dados da tabela users (nome, email, telefone, foto, profissao,
+     *   latitude, longitude, raio_atendimento, disponivel, verificado,
+     *   media_avaliacao, total_avaliacoes, sobre)
+     * - Dados da tabela prestador_profiles (endereco, portfolio,
+     *   disponibilidade, documento_verificado)
      */
     public function show(Request $request)
     {
@@ -28,24 +35,42 @@ class PrestadorPerfilController extends BaseController
         return response()->json([
             'success' => true,
             'data' => [
+                // ==========================================================
+                // 🔥 DADOS DA TABELA USERS
+                // ==========================================================
                 'id' => $user->id,
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
                 'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
-                'profissao' => $profile ? $profile->profissao : null,
-                'sobre' => $profile ? $profile->sobre : null,
-                'media_avaliacao' => $profile ? (float) $profile->media_avaliacao : 0,
-                'total_avaliacoes' => $profile ? (int) $profile->total_avaliacoes : 0,
+                'profissao' => $user->profissao,
+                'sobre' => $user->sobre,  // ✅ SOBRE ESTÁ NA TABELA USERS
+                'latitude' => $user->latitude ? (float) $user->latitude : null,
+                'longitude' => $user->longitude ? (float) $user->longitude : null,
+                'raio_atendimento' => $user->raio_atendimento ?? 10,
+                'disponivel' => $user->disponivel ?? true,
+                'verificado' => $user->verificado ?? false,
+                'media_avaliacao' => $user->media_avaliacao ? (float) $user->media_avaliacao : 0,
+                'total_avaliacoes' => $user->total_avaliacoes ?? 0,
+                'created_at' => $user->created_at,
+                'updated_at' => $user->updated_at,
+
+                // ==========================================================
+                // 🔥 DADOS DA TABELA prestador_profiles
+                // ==========================================================
+                'endereco' => $profile ? $profile->endereco : null,
                 'portfolio' => $portfolioUrls,
                 'disponibilidade' => $profile ? ($profile->disponibilidade ?? null) : null,
                 'documento_verificado' => $profile ? ($profile->status_documento === 'aprovado') : false,
+                'status_documento' => $profile ? ($profile->status_documento ?? 'pendente') : 'pendente',
             ]
         ]);
     }
 
     /**
      * PUT /prestador/perfil - Atualizar perfil
+     *
+     * 🔥 PERMITE ATUALIZAR TODOS OS CAMPOS
      */
     public function update(Request $request)
     {
@@ -57,6 +82,10 @@ class PrestadorPerfilController extends BaseController
             'telefone' => 'sometimes|string|max:20',
             'profissao' => 'nullable|string|max:255',
             'sobre' => 'nullable|string',
+            'endereco' => 'nullable|string|max:500',
+            'latitude' => 'nullable|numeric|between:-90,90',
+            'longitude' => 'nullable|numeric|between:-180,180',
+            'raio_atendimento' => 'nullable|integer|min:1|max:100',
         ]);
 
         if ($validator->fails()) {
@@ -66,15 +95,30 @@ class PrestadorPerfilController extends BaseController
             ], 422);
         }
 
-        // Atualizar dados do user
-        $userData = $request->only(['nome', 'email', 'telefone']);
+        // ==========================================================
+        // 🔥 ATUALIZAR DADOS DA TABELA USERS
+        // ==========================================================
+        $userData = $request->only([
+            'nome',
+            'email',
+            'telefone',
+            'profissao',
+            'sobre',      // ✅ SOBRE ESTÁ NA TABELA USERS
+            'latitude',
+            'longitude',
+            'raio_atendimento'
+        ]);
+
         if (!empty($userData)) {
             $user->update($userData);
         }
 
-        // Atualizar dados do profile
+        // ==========================================================
+        // 🔥 ATUALIZAR DADOS DA TABELA prestador_profiles
+        // ==========================================================
         $profile = $user->prestadorProfile()->firstOrCreate(['user_id' => $user->id]);
-        $profileData = $request->only(['profissao', 'sobre']);
+        $profileData = $request->only(['endereco']);
+
         if (!empty($profileData)) {
             $profile->update($profileData);
         }
@@ -83,10 +127,13 @@ class PrestadorPerfilController extends BaseController
             'nome' => $user->nome,
         ]);
 
+        // ==========================================================
+        // 🔥 RETORNAR DADOS ATUALIZADOS COMPLETOS
+        // ==========================================================
         return response()->json([
             'success' => true,
             'message' => 'Perfil atualizado com sucesso',
-            'data' => $userData
+            'data' => $this->getPerfilCompleto($user)
         ]);
     }
 
@@ -112,7 +159,6 @@ class PrestadorPerfilController extends BaseController
         if ($request->hasFile('foto')) {
             $file = $request->file('foto');
 
-            // Verificar tamanho novamente para garantir
             if ($file->getSize() > 5 * 1024 * 1024) {
                 return response()->json([
                     'success' => false,
@@ -120,12 +166,10 @@ class PrestadorPerfilController extends BaseController
                 ], 422);
             }
 
-            // Remover foto antiga
             if ($user->foto) {
                 Storage::disk('public')->delete($user->foto);
             }
 
-            // Gerar nome único para o arquivo
             $extension = $file->getClientOriginalExtension();
             $filename = 'perfil_' . $user->id . '_' . time() . '.' . $extension;
             $path = $file->storeAs('usuarios', $filename, 'public');
@@ -210,6 +254,7 @@ class PrestadorPerfilController extends BaseController
                 'id' => $c->id,
                 'nome' => $c->nome,
                 'icone' => $c->icone ?? 'category',
+                'cor' => $c->cor ?? '#5B4BF5',
             ]);
 
         return response()->json([
@@ -328,7 +373,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS E REFORÇADOS
+    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS
     // ==========================================
 
     /**
@@ -339,9 +384,7 @@ class PrestadorPerfilController extends BaseController
         $result = [];
         foreach ($portfolio as $index => $item) {
             if (is_string($item)) {
-                // Limpa o caminho
                 $path = $this->cleanStoragePath($item);
-
                 $result[] = [
                     'id' => $index + 1,
                     'url' => asset('storage/' . $path),
@@ -368,12 +411,45 @@ class PrestadorPerfilController extends BaseController
      */
     private function cleanStoragePath(string $path): string
     {
-        // Remove prefixes duplicados
         $path = str_replace('storage/', '', $path);
         $path = str_replace('public/', '', $path);
         $path = str_replace('app/public/', '', $path);
         $path = ltrim($path, '/');
         return $path;
+    }
+
+    /**
+     * Helper: Retorna perfil completo
+     */
+    private function getPerfilCompleto(User $user): array
+    {
+        $profile = $user->prestadorProfile;
+        $portfolio = $profile ? ($profile->portfolio ?? []) : [];
+        $portfolioUrls = $this->processPortfolioUrls($portfolio);
+
+        return [
+            'id' => $user->id,
+            'nome' => $user->nome,
+            'email' => $user->email,
+            'telefone' => $user->telefone,
+            'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+            'profissao' => $user->profissao,
+            'sobre' => $user->sobre,
+            'latitude' => $user->latitude ? (float) $user->latitude : null,
+            'longitude' => $user->longitude ? (float) $user->longitude : null,
+            'raio_atendimento' => $user->raio_atendimento ?? 10,
+            'disponivel' => $user->disponivel ?? true,
+            'verificado' => $user->verificado ?? false,
+            'media_avaliacao' => $user->media_avaliacao ? (float) $user->media_avaliacao : 0,
+            'total_avaliacoes' => $user->total_avaliacoes ?? 0,
+            'endereco' => $profile ? $profile->endereco : null,
+            'portfolio' => $portfolioUrls,
+            'disponibilidade' => $profile ? ($profile->disponibilidade ?? null) : null,
+            'documento_verificado' => $profile ? ($profile->status_documento === 'aprovado') : false,
+            'status_documento' => $profile ? ($profile->status_documento ?? 'pendente') : 'pendente',
+            'created_at' => $user->created_at,
+            'updated_at' => $user->updated_at,
+        ];
     }
 
     /**
@@ -390,9 +466,7 @@ class PrestadorPerfilController extends BaseController
         foreach ($portfolio as $index => $item) {
             if (is_string($item)) {
                 $path = ltrim($item, '/');
-                // Força URL absoluta
                 $url = url('/storage/' . $path);
-
                 $portfolioItems[] = [
                     'id' => $index + 1,
                     'url' => $url,
@@ -434,7 +508,6 @@ class PrestadorPerfilController extends BaseController
 
         $profile = $user->prestadorProfile()->firstOrCreate(['user_id' => $user->id]);
 
-        // Upload da imagem
         $file = $request->file('foto');
         $extension = $file->getClientOriginalExtension();
         $filename = Str::random(40) . '.' . $extension;
@@ -442,7 +515,6 @@ class PrestadorPerfilController extends BaseController
 
         $portfolio = $profile->portfolio ?? [];
 
-        // Adicionar com estrutura de objeto
         $newItem = [
             'id' => time() . rand(1000, 9999),
             'url' => asset('storage/' . $path),
@@ -484,7 +556,6 @@ class PrestadorPerfilController extends BaseController
 
         $portfolio = $profile->portfolio ?? [];
 
-        // Encontrar o item pelo ID
         $itemEncontrado = null;
         $indexEncontrado = -1;
 
@@ -503,7 +574,6 @@ class PrestadorPerfilController extends BaseController
             ], 404);
         }
 
-        // Remover o arquivo físico se existir
         if (isset($itemEncontrado['path'])) {
             $cleanPath = $this->cleanStoragePath($itemEncontrado['path']);
             if (Storage::disk('public')->exists($cleanPath)) {
@@ -511,7 +581,6 @@ class PrestadorPerfilController extends BaseController
             }
         }
 
-        // Remover do array
         array_splice($portfolio, $indexEncontrado, 1);
         $profile->portfolio = $portfolio;
         $profile->save();
@@ -664,14 +733,12 @@ class PrestadorPerfilController extends BaseController
     }
 
     /**
-     * DELETE /api/prestador/perfil/conta
-     * Excluir conta do prestador
+     * DELETE /api/prestador/perfil/conta - Excluir conta
      */
     public function deleteAccount(Request $request)
     {
         $user = $request->user();
 
-        // Excluir portfólio físico
         $profile = $user->prestadorProfile;
         if ($profile && $profile->portfolio) {
             foreach ($profile->portfolio as $item) {
@@ -684,23 +751,16 @@ class PrestadorPerfilController extends BaseController
             }
         }
 
-        // Excluir perfil do prestador
         if ($profile) {
             $profile->delete();
         }
 
-        // Excluir foto de perfil
         if ($user->foto) {
             Storage::disk('public')->delete($user->foto);
         }
 
-        // Excluir endereços
         $user->enderecos()->delete();
-
-        // Excluir tokens
         $user->tokens()->delete();
-
-        // Excluir o usuário
         $user->delete();
 
         return response()->json([

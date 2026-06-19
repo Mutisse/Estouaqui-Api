@@ -222,8 +222,9 @@ class AuthController extends BaseController
             'sobre' => 'nullable|string',
             'profissao' => 'nullable|string',
             'raio_atendimento' => 'nullable|integer|min:1|max:100',
-            'latitude' => 'nullable|numeric',
-            'longitude' => 'nullable|numeric',
+            // ✅ TORNAR OBRIGATÓRIO
+            'latitude' => 'required|numeric',
+            'longitude' => 'required|numeric',
             'categorias' => 'nullable|json',
             'disponibilidade' => 'nullable|json',
             'portfolio.*' => 'nullable|image|max:5120',
