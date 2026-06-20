@@ -1,63 +1,41 @@
 FROM php:8.3-fpm
 
-# Instalar dependências
+# Install dependencies
 RUN apt-get update && apt-get install -y \
-    git curl libpng-dev libonig-dev libxml2-dev zip unzip \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    git \
+    curl \
+    libpng-dev \
+    libonig-dev \
+    libxml2-dev \
+    zip \
+    unzip
 
-# Extensões PHP
+# Install PHP extensions
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
 
-# Composer
+# Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
+# Set working directory
 WORKDIR /var/www/html
 
-# Copiar código
+# Copy existing application directory
 COPY . .
 
-# Criar SQLite (necessário para cache)
-RUN mkdir -p database && touch database/database.sqlite
-
-# Instalar dependências
+# Install dependencies
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# ============================================================
-# 🔥 RODAR MIGRATIONS E SEEDERS
-# ============================================================
-# Limpar cache antes
-RUN php artisan config:clear || true
-RUN php artisan cache:clear || true
+# 🔥 LINHA ADICIONADA - FORÇAR CRIAÇÃO DO LINK 🔥
+RUN php artisan storage:link || true
 
-# Rodar migrations
-RUN php artisan migrate --force || true
+# ========== SÓ ISSO ==========
+ENV APP_URL=https://estouaqui-api.onrender.com
+# ==============================
 
-# Rodar seeders
-RUN php artisan db:seed --force || true
-
-# Recriar cache
-RUN php artisan config:cache || true
-RUN php artisan route:cache || true
-RUN php artisan view:cache || true
-
-# ============================================================
-# PERMISSÕES
-# ============================================================
-RUN chown -R www-data:www-data storage bootstrap/cache database \
-    && chmod -R 775 storage bootstrap/cache database
+# Set permissions
+RUN chown -R www-data:www-data storage bootstrap/cache
+RUN chmod -R 775 storage bootstrap/cache
 
 EXPOSE 8000
 
-# ============================================================
-# CMD com limpeza de cache
-# ============================================================
-CMD php artisan config:clear \
-    && php artisan cache:clear \
-    && php artisan view:clear \
-    && php artisan route:clear \
-    && php artisan migrate --force \
-    && php artisan db:seed --force \
-    && php artisan config:cache \
-    && php artisan route:cache \
-    && php artisan view:cache \
-    && php artisan serve --host=0.0.0.0 --port=8000
+CMD php artisan serve --host=0.0.0.0 --port=8000
