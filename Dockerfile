@@ -1,84 +1,34 @@
 FROM php:8.3-fpm
 
-# ============================================================
-# INSTALAR DEPENDÊNCIAS
-# ============================================================
+# Instalar dependências
 RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    libpng-dev \
-    libonig-dev \
-    libxml2-dev \
-    zip \
-    unzip \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+    git curl libpng-dev libonig-dev libxml2-dev zip unzip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ============================================================
-# INSTALAR EXTENSÕES PHP
-# ============================================================
+# Extensões PHP
 RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
 
-# ============================================================
-# INSTALAR COMPOSER
-# ============================================================
+# Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
-# ============================================================
-# DEFINIR DIRETÓRIO DE TRABALHO
-# ============================================================
 WORKDIR /var/www/html
 
-# ============================================================
-# COPIAR ARQUIVOS
-# ============================================================
+# Copiar código
 COPY . .
 
-# ============================================================
-# INSTALAR DEPENDÊNCIAS
-# ============================================================
+# Criar SQLite (necessário para cache)
+RUN mkdir -p database && touch database/database.sqlite
+
+# Instalar dependências
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# ============================================================
-# 🔥 CONFIGURAR AMBIENTE
-# ============================================================
-ENV APP_URL=https://estouaqui-api.onrender.com
+# Cache (ignorando erros de banco de dados)
+RUN php artisan config:cache || true
 
-# ============================================================
-# 🔥 LIMPAR E RECONSTRUIR CACHES
-# ============================================================
-RUN php artisan config:clear \
-    && php artisan cache:clear \
-    && php artisan view:clear \
-    && php artisan route:clear \
-    && php artisan config:cache \
-    && php artisan route:cache \
-    && php artisan view:cache
+# Permissões
+RUN chown -R www-data:www-data storage bootstrap/cache database \
+    && chmod -R 775 storage bootstrap/cache database
 
-# ============================================================
-# 🔥 CRIAR LINK STORAGE
-# ============================================================
-RUN php artisan storage:link || true
-
-# ============================================================
-# PERMISSÕES
-# ============================================================
-RUN chown -R www-data:www-data storage bootstrap/cache \
-    && chmod -R 775 storage bootstrap/cache
-
-# ============================================================
-# EXPORTA PORTA
-# ============================================================
 EXPOSE 8000
 
-# ============================================================
-# 🔥 COMANDO DE INÍCIO - LIMPA CACHE E SOBE O SERVIDOR
-# ============================================================
-CMD php artisan config:clear \
-    && php artisan cache:clear \
-    && php artisan view:clear \
-    && php artisan route:clear \
-    && php artisan config:cache \
-    && php artisan route:cache \
-    && php artisan view:cache \
-    && php artisan serve --host=0.0.0.0 --port=8000
+CMD php artisan serve --host=0.0.0.0 --port=8000
