@@ -9,53 +9,100 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Log;
 
 class AdminUtilizadorController extends Controller
 {
-    /**
-     * Cache time for user lists (5 minutes)
-     */
-    private const CACHE_TIME = 300;
     private const PER_PAGE_DEFAULT = 15;
 
-    /**
-     * Listar todos os utilizadores com paginação e filtros (OTIMIZADO)
-     * GET /admin/utilizadores
-     */
+    // ==========================================
+    // 🔥 LISTAR UTILIZADORES COM TODOS OS DADOS
+    // ==========================================
+
     public function index(Request $request)
     {
         try {
             $perPage = (int) $request->input('per_page', self::PER_PAGE_DEFAULT);
-            $page = (int) $request->input('page', 1);
 
-            // Criar chave de cache única baseada nos filtros
-            $cacheKey = $this->getCacheKey($request);
+            $query = User::query();
 
-            // Tentar buscar do cache
-            $result = Cache::remember($cacheKey, self::CACHE_TIME, function () use ($request, $perPage) {
-                $query = User::query();
+            $this->applyFilters($query, $request);
 
-                // Aplicar filtros de forma eficiente
-                $this->applyFilters($query, $request);
+            // 🔥 SELECIONAR TODOS OS CAMPOS IMPORTANTES
+            $query->select([
+                'id',
+                'nome',
+                'email',
+                'telefone',
+                'tipo',
+                'verificado',
+                'disponivel',
+                'status',
+                'profissao',
+                'sobre',
+                'media_avaliacao',
+                'total_avaliacoes',
+                'latitude',
+                'longitude',
+                'raio_atendimento',
+                'configuracoes',
+                'created_at',
+                'updated_at'
+            ]);
 
-                // Selecionar apenas colunas necessárias
-                $query->select(['id', 'nome', 'email', 'telefone', 'tipo', 'verificado', 'disponivel', 'created_at', 'profissao', 'media_avaliacao']);
+            // 🔥 CARREGAR RELACIONAMENTOS PARA MOSTRAR NA TABELA
+            $query->with([
+                'categorias:id,nome',
+                'servicos:id,nome,preco,duracao',
+                'prestadorProfile:id,user_id,status_documento'
+            ]);
 
-                // Paginar
-                $paginated = $query->orderBy('created_at', 'desc')->paginate($perPage);
+            $paginated = $query->orderBy('created_at', 'desc')->paginate($perPage);
 
+            // 🔥 FORMATAR OS DADOS PARA O FRONTEND
+            $data = $paginated->items();
+            $data = array_map(function ($user) {
                 return [
-                    'data' => $paginated->items(),
-                    'current_page' => $paginated->currentPage(),
-                    'last_page' => $paginated->lastPage(),
-                    'per_page' => $paginated->perPage(),
-                    'total' => $paginated->total(),
+                    'id' => $user->id,
+                    'nome' => $user->nome,
+                    'email' => $user->email,
+                    'telefone' => $user->telefone,
+                    'tipo' => $user->tipo,
+                    'verificado' => (bool) $user->verificado,
+                    'disponivel' => (bool) $user->disponivel,
+                    'status' => $user->status,
+                    'profissao' => $user->profissao,
+                    'sobre' => $user->sobre,
+                    'media_avaliacao' => $user->media_avaliacao ? (float) $user->media_avaliacao : 0,
+                    'total_avaliacoes' => $user->total_avaliacoes ?? 0,
+                    'raio_atendimento' => $user->raio_atendimento ?? 10,
+                    'latitude' => $user->latitude ? (float) $user->latitude : null,
+                    'longitude' => $user->longitude ? (float) $user->longitude : null,
+                    'categorias' => $user->categorias->pluck('nome')->toArray(),
+                    'servicos' => $user->servicos->map(function ($servico) {
+                        return [
+                            'nome' => $servico->nome,
+                            'preco' => (float) $servico->preco,
+                            'duracao' => $servico->duracao
+                        ];
+                    })->toArray(),
+                    'status_documento' => $user->prestadorProfile?->status_documento ?? null,
+                    'created_at' => $user->created_at,
+                    'updated_at' => $user->updated_at,
                 ];
-            });
+            }, $data);
 
-            return response()->json(['success' => true, ...$result]);
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+                'current_page' => $paginated->currentPage(),
+                'last_page' => $paginated->lastPage(),
+                'per_page' => $paginated->perPage(),
+                'total' => $paginated->total(),
+            ]);
 
         } catch (\Exception $e) {
+            Log::error('Erro ao listar utilizadores: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Erro ao carregar utilizadores: ' . $e->getMessage()
@@ -63,34 +110,82 @@ class AdminUtilizadorController extends Controller
         }
     }
 
-    /**
-     * Buscar um utilizador específico (COM CACHE)
-     * GET /admin/utilizadores/{id}
-     */
+    // ==========================================
+    // 🔥 BUSCAR UTILIZADOR ESPECÍFICO (COMPLETO)
+    // ==========================================
+
     public function show($id)
     {
         try {
-            $cacheKey = "user_{$id}";
+            $utilizador = User::with([
+                'prestadorProfile',
+                'categorias',
+                'servicos',
+                'enderecos',
+                'avaliacoesRecebidas',
+                'avaliacoesFeitas',
+                'pedidosComoCliente',
+                'pedidosComoPrestador',
+                'favoritos'
+            ])->find($id);
 
-            $utilizador = Cache::remember($cacheKey, self::CACHE_TIME, function () use ($id) {
-                return User::select(['id', 'nome', 'email', 'telefone', 'tipo', 'verificado', 'disponivel', 'created_at', 'profissao', 'sobre', 'media_avaliacao', 'total_avaliacoes', 'raio_atendimento'])
-                    ->findOrFail($id);
-            });
+            if (!$utilizador) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Utilizador não encontrado'
+                ], 404);
+            }
 
-            return response()->json(['success' => true, 'data' => $utilizador]);
+            // 🔥 FORMATAR RESPOSTA COMPLETA
+            $data = [
+                'id' => $utilizador->id,
+                'nome' => $utilizador->nome,
+                'email' => $utilizador->email,
+                'telefone' => $utilizador->telefone,
+                'tipo' => $utilizador->tipo,
+                'foto' => $utilizador->foto,
+                'verificado' => (bool) $utilizador->verificado,
+                'disponivel' => (bool) $utilizador->disponivel,
+                'status' => $utilizador->status,
+                'profissao' => $utilizador->profissao,
+                'sobre' => $utilizador->sobre,
+                'media_avaliacao' => $utilizador->media_avaliacao ? (float) $utilizador->media_avaliacao : 0,
+                'total_avaliacoes' => $utilizador->total_avaliacoes ?? 0,
+                'latitude' => $utilizador->latitude ? (float) $utilizador->latitude : null,
+                'longitude' => $utilizador->longitude ? (float) $utilizador->longitude : null,
+                'raio_atendimento' => $utilizador->raio_atendimento ?? 10,
+                'configuracoes' => $utilizador->configuracoes,
+                'created_at' => $utilizador->created_at,
+                'updated_at' => $utilizador->updated_at,
+                'prestador_profile' => $utilizador->prestadorProfile,
+                'categorias' => $utilizador->categorias,
+                'servicos' => $utilizador->servicos,
+                'enderecos' => $utilizador->enderecos,
+                'avaliacoes_recebidas' => $utilizador->avaliacoesRecebidas,
+                'avaliacoes_feitas' => $utilizador->avaliacoesFeitas,
+                'pedidos_como_cliente' => $utilizador->pedidosComoCliente,
+                'pedidos_como_prestador' => $utilizador->pedidosComoPrestador,
+                'favoritos' => $utilizador->favoritos,
+            ];
+
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ]);
 
         } catch (\Exception $e) {
+            Log::error('Erro ao buscar utilizador: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Utilizador não encontrado'
-            ], 404);
+                'message' => 'Erro ao buscar utilizador: ' . $e->getMessage()
+            ], 500);
         }
     }
 
-    /**
-     * Criar um novo utilizador (INVALIDA CACHE)
-     * POST /admin/utilizadores
-     */
+    // ==========================================
+    // 🔥 CRUD (store, update, destroy, etc)
+    // ==========================================
+
     public function store(Request $request)
     {
         try {
@@ -114,13 +209,11 @@ class AdminUtilizadorController extends Controller
                 'sobre' => $validated['sobre'] ?? null,
                 'verificado' => in_array($validated['tipo'], ['admin', 'root']),
                 'disponivel' => true,
+                'status' => 'ativo',
                 'media_avaliacao' => 0,
                 'total_avaliacoes' => 0,
                 'raio_atendimento' => 10,
             ]);
-
-            // Invalidar caches relacionados
-            $this->invalidateUserCaches();
 
             return response()->json([
                 'success' => true,
@@ -142,10 +235,6 @@ class AdminUtilizadorController extends Controller
         }
     }
 
-    /**
-     * Atualizar um utilizador (INVALIDA CACHE)
-     * PUT /admin/utilizadores/{id}
-     */
     public function update(Request $request, $id)
     {
         try {
@@ -161,7 +250,6 @@ class AdminUtilizadorController extends Controller
                 'password' => 'nullable|string|min:6',
             ]);
 
-            // Atualizar apenas campos enviados (mais rápido)
             $updatableFields = ['nome', 'email', 'telefone', 'tipo', 'profissao', 'sobre'];
             foreach ($updatableFields as $field) {
                 if (array_key_exists($field, $validated)) {
@@ -174,9 +262,6 @@ class AdminUtilizadorController extends Controller
             }
 
             $utilizador->save();
-
-            // Invalidar caches
-            $this->invalidateUserCaches($id);
 
             return response()->json([
                 'success' => true,
@@ -198,10 +283,6 @@ class AdminUtilizadorController extends Controller
         }
     }
 
-    /**
-     * Eliminar um utilizador (INVALIDA CACHE)
-     * DELETE /admin/utilizadores/{id}
-     */
     public function destroy($id)
     {
         try {
@@ -211,33 +292,69 @@ class AdminUtilizadorController extends Controller
             if ($currentUser && $utilizador->id === $currentUser->id) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Não pode excluir o seu próprio utilizador'
+                    'message' => 'Não pode eliminar o seu próprio utilizador'
                 ], 403);
             }
 
+            if ($utilizador->foto) {
+                \Illuminate\Support\Facades\Storage::disk('public')->delete($utilizador->foto);
+            }
+
+            $nome = $utilizador->nome;
             $utilizador->delete();
 
-            // Invalidar caches
-            $this->invalidateUserCaches($id);
+            Log::info('Utilizador eliminado', [
+                'user_id' => $id,
+                'nome' => $nome,
+                'admin_id' => $currentUser?->id
+            ]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Utilizador excluído com sucesso'
+                'message' => "Utilizador {$nome} eliminado com sucesso"
             ]);
 
         } catch (\Exception $e) {
+            Log::error('Erro ao eliminar utilizador: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao excluir utilizador: ' . $e->getMessage()
+                'message' => 'Erro ao eliminar utilizador: ' . $e->getMessage()
             ], 500);
         }
     }
 
-    /**
-     * Verificar um prestador (INVALIDA CACHE)
-     * PUT /admin/utilizadores/{id}/verificar
-     */
+    // ==========================================
+    // 🔥 AÇÕES DE STATUS
+    // ==========================================
+
     public function verificar($id)
+    {
+        try {
+            $utilizador = User::findOrFail($id);
+            $utilizador->verificado = true;
+            $utilizador->save();
+
+            Log::info('Utilizador verificado', [
+                'user_id' => $utilizador->id,
+                'nome' => $utilizador->nome
+            ]);
+
+            return response()->json([
+                'success' => true,
+                'data' => $utilizador,
+                'message' => 'Utilizador verificado com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro ao verificar utilizador: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao verificar utilizador: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function aprovar($id)
     {
         try {
             $utilizador = User::findOrFail($id);
@@ -245,34 +362,111 @@ class AdminUtilizadorController extends Controller
             if ($utilizador->tipo !== 'prestador') {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Apenas prestadores podem ser verificados'
+                    'message' => 'Apenas prestadores podem ser aprovados'
                 ], 422);
             }
 
             $utilizador->verificado = true;
+            $utilizador->status = 'ativo';
             $utilizador->save();
-
-            // Invalidar caches
-            $this->invalidateUserCaches($id);
 
             return response()->json([
                 'success' => true,
                 'data' => $utilizador,
-                'message' => 'Prestador verificado com sucesso'
+                'message' => 'Prestador aprovado com sucesso'
             ]);
 
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Erro ao verificar prestador: ' . $e->getMessage()
+                'message' => 'Erro ao aprovar prestador: ' . $e->getMessage()
             ], 500);
         }
     }
 
-    /**
-     * Bloquear um utilizador (INVALIDA CACHE)
-     * PUT /admin/utilizadores/{id}/bloquear
-     */
+    public function reprovar($id)
+    {
+        try {
+            $utilizador = User::findOrFail($id);
+
+            if ($utilizador->tipo !== 'prestador') {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Apenas prestadores podem ser reprovados'
+                ], 422);
+            }
+
+            $utilizador->verificado = false;
+            $utilizador->status = 'reprovado';
+            $utilizador->save();
+
+            return response()->json([
+                'success' => true,
+                'data' => $utilizador,
+                'message' => 'Prestador reprovado com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao reprovar prestador: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function ativar($id)
+    {
+        try {
+            $utilizador = User::findOrFail($id);
+            $utilizador->disponivel = true;
+            $utilizador->status = 'ativo';
+            $utilizador->save();
+
+            return response()->json([
+                'success' => true,
+                'data' => $utilizador,
+                'message' => 'Utilizador ativado com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao ativar utilizador: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    public function desativar($id)
+    {
+        try {
+            $utilizador = User::findOrFail($id);
+            $currentUser = Auth::user();
+
+            if ($currentUser && $utilizador->id === $currentUser->id) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Não pode desativar o seu próprio utilizador'
+                ], 403);
+            }
+
+            $utilizador->disponivel = false;
+            $utilizador->status = 'desativado';
+            $utilizador->save();
+
+            return response()->json([
+                'success' => true,
+                'data' => $utilizador,
+                'message' => 'Utilizador desativado com sucesso'
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao desativar utilizador: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
     public function bloquear($id)
     {
         try {
@@ -287,10 +481,8 @@ class AdminUtilizadorController extends Controller
             }
 
             $utilizador->disponivel = false;
+            $utilizador->status = 'bloqueado';
             $utilizador->save();
-
-            // Invalidar caches
-            $this->invalidateUserCaches($id);
 
             return response()->json([
                 'success' => true,
@@ -306,19 +498,13 @@ class AdminUtilizadorController extends Controller
         }
     }
 
-    /**
-     * Desbloquear um utilizador (INVALIDA CACHE)
-     * PUT /admin/utilizadores/{id}/desbloquear
-     */
     public function desbloquear($id)
     {
         try {
             $utilizador = User::findOrFail($id);
             $utilizador->disponivel = true;
+            $utilizador->status = 'ativo';
             $utilizador->save();
-
-            // Invalidar caches
-            $this->invalidateUserCaches($id);
 
             return response()->json([
                 'success' => true,
@@ -334,21 +520,22 @@ class AdminUtilizadorController extends Controller
         }
     }
 
-    // ==================== MÉTODOS PRIVADOS OTIMIZADOS ====================
+    // ==========================================
+    // 🔥 MÉTODOS PRIVADOS
+    // ==========================================
 
-    /**
-     * Aplica filtros de forma eficiente
-     */
     private function applyFilters($query, Request $request): void
     {
         $search = $request->input('search');
         $tipo = $request->input('tipo');
         $verificado = $request->input('verificado');
+        $status = $request->input('status');
 
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('nome', 'like', "%{$search}%")
-                    ->orWhere('email', 'like', "%{$search}%");
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('telefone', 'like', "%{$search}%");
                 if (is_numeric($search)) {
                     $q->orWhere('id', $search);
                 }
@@ -362,44 +549,9 @@ class AdminUtilizadorController extends Controller
         if ($verificado !== null && $verificado !== '') {
             $query->where('verificado', filter_var($verificado, FILTER_VALIDATE_BOOLEAN));
         }
-    }
 
-    /**
-     * Gera chave de cache única baseada nos filtros
-     */
-    private function getCacheKey(Request $request): string
-    {
-        $params = [
-            'per_page' => $request->input('per_page', self::PER_PAGE_DEFAULT),
-            'page' => $request->input('page', 1),
-            'search' => $request->input('search', ''),
-            'tipo' => $request->input('tipo', ''),
-            'verificado' => $request->input('verificado', ''),
-        ];
-
-        return 'admin_users_' . md5(json_encode($params));
-    }
-
-    /**
-     * Invalida todos os caches relacionados a utilizadores
-     */
-    private function invalidateUserCaches(?int $userId = null): void
-    {
-        // Invalidar cache específico do usuário
-        if ($userId) {
-            Cache::forget("user_{$userId}");
+        if ($status && in_array($status, ['ativo', 'desativado', 'bloqueado', 'reprovado', 'pendente'])) {
+            $query->where('status', $status);
         }
-
-        // Invalidar cache de listas (usando padrão)
-        $keys = Cache::get('admin_users_keys', []);
-        foreach ($keys as $key) {
-            Cache::forget($key);
-        }
-
-        Cache::forget('admin_users_keys');
-
-        // Invalidar estatísticas do dashboard
-        Cache::forget('admin_dashboard_stats');
-        Cache::forget('admin_dashboard_atividade');
     }
 }

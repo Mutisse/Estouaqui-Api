@@ -322,6 +322,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
 // ==========================================
 // ROTAS ADMIN (requerem token e role admin/root)
 // ==========================================
+// ==========================================
+// ROTAS ADMIN (requerem token e role admin/root)
+// ==========================================
 Route::middleware(['auth:sanctum', 'admin'])->prefix('/admin')->group(function () {
 
     // ==================== ADMIN - DASHBOARD ====================
@@ -338,9 +341,15 @@ Route::middleware(['auth:sanctum', 'admin'])->prefix('/admin')->group(function (
     Route::post('/utilizadores', [AdminUtilizadorController::class, 'store']);
     Route::put('/utilizadores/{id}', [AdminUtilizadorController::class, 'update']);
     Route::delete('/utilizadores/{id}', [AdminUtilizadorController::class, 'destroy']);
-    Route::put('/utilizadores/{id}/verificar', [AdminUtilizadorController::class, 'verificar']);
+
+    // 🔥 ROTAS DE GESTÃO DE STATUS
+    Route::put('/utilizadores/{id}/aprovar', [AdminUtilizadorController::class, 'aprovar']);
+    Route::put('/utilizadores/{id}/reprovar', [AdminUtilizadorController::class, 'reprovar']);
+    Route::put('/utilizadores/{id}/ativar', [AdminUtilizadorController::class, 'ativar']);
+    Route::put('/utilizadores/{id}/desativar', [AdminUtilizadorController::class, 'desativar']);
     Route::put('/utilizadores/{id}/bloquear', [AdminUtilizadorController::class, 'bloquear']);
     Route::put('/utilizadores/{id}/desbloquear', [AdminUtilizadorController::class, 'desbloquear']);
+    Route::put('/utilizadores/{id}/verificar', [AdminUtilizadorController::class, 'verificar']);
 
     // ==================== ADMIN - PRESTADORES ====================
     Route::get('/prestadores/profissoes', [AdminPrestadorController::class, 'profissoes']);
@@ -528,4 +537,3 @@ Route::get('/health', function () {
         'message' => 'API EstouAqui está funcionando!'
     ]);
 });
-

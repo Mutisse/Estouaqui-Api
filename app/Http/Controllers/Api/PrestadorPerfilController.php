@@ -10,6 +10,7 @@ use App\Services\NotificationService;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
 
 class PrestadorPerfilController extends BaseController
 {
@@ -19,9 +20,6 @@ class PrestadorPerfilController extends BaseController
 
     /**
      * Gera URL correta para imagens usando a rota /imagem
-     *
-     * @param string|null $path Caminho da imagem (ex: "perfis/prestador/foto.jpg")
-     * @return string|null URL completa da imagem
      */
     private function getImageUrl(?string $path): ?string
     {
@@ -29,13 +27,12 @@ class PrestadorPerfilController extends BaseController
             return null;
         }
 
-        // Limpa o path (remove qualquer prefixo indesejado)
+        // Limpa o path
         $path = ltrim($path, '/');
         $path = str_replace('storage/', '', $path);
         $path = str_replace('public/', '', $path);
         $path = str_replace('app/public/', '', $path);
 
-        // 🔥 USA A ROTA /imagem (NÃO secure_asset)
         return url('/imagem/' . $path);
     }
 
@@ -64,7 +61,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     /**
-     * Processa URLs do portfólio (CORRIGIDO)
+     * Processa URLs do portfólio
      */
     private function processPortfolioUrls(array $portfolio): array
     {
@@ -74,7 +71,7 @@ class PrestadorPerfilController extends BaseController
                 $path = $this->cleanStoragePath($item);
                 $result[] = [
                     'id' => $index + 1,
-                    'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
+                    'url' => $this->getImageUrl($path),
                     'path' => $path,
                     'titulo' => '',
                     'descricao' => '',
@@ -83,10 +80,10 @@ class PrestadorPerfilController extends BaseController
             } elseif (is_array($item)) {
                 if (isset($item['path'])) {
                     $path = $this->cleanStoragePath($item['path']);
-                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                    $item['url'] = $this->getImageUrl($path);
                 } elseif (isset($item['url'])) {
                     $path = $this->extractPathFromUrl($item['url']);
-                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                    $item['url'] = $this->getImageUrl($path);
                 }
                 $result[] = $item;
             }
@@ -95,7 +92,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // 🔥 PERFIL - SHOW (CORRIGIDO)
+    // 🔥 PERFIL - SHOW
     // ==========================================
 
     public function show(Request $request)
@@ -113,7 +110,7 @@ class PrestadorPerfilController extends BaseController
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
-                'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
+                'foto' => $this->getImageUrl($user->foto),
                 'profissao' => $user->profissao,
                 'sobre' => $user->sobre,
                 'latitude' => $user->latitude ? (float) $user->latitude : null,
@@ -134,6 +131,10 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
+    // ==========================================
+    // 🔥 ATUALIZAR PERFIL - CORRIGIDO
+    // ==========================================
+
     /**
      * PUT /prestador/perfil - Atualizar perfil
      */
@@ -141,6 +142,7 @@ class PrestadorPerfilController extends BaseController
     {
         $user = $request->user();
 
+        // 🔥 VALIDAÇÃO
         $validator = Validator::make($request->all(), [
             'nome' => 'sometimes|string|max:255',
             'email' => 'sometimes|email|unique:users,email,' . $user->id,
@@ -160,26 +162,49 @@ class PrestadorPerfilController extends BaseController
             ], 422);
         }
 
-        $userData = $request->only([
-            'nome',
-            'email',
-            'telefone',
-            'profissao',
-            'sobre',
-            'latitude',
-            'longitude',
-            'raio_atendimento'
-        ]);
+        // 🔥 ATUALIZAR DADOS DA TABELA USERS
+        $userData = [];
+
+        if ($request->has('nome')) {
+            $userData['nome'] = $request->nome;
+        }
+        if ($request->has('email')) {
+            $userData['email'] = $request->email;
+        }
+        if ($request->has('telefone')) {
+            $userData['telefone'] = $request->telefone;
+        }
+        if ($request->has('profissao')) {
+            $userData['profissao'] = $request->profissao;
+        }
+        if ($request->has('sobre')) {
+            $userData['sobre'] = $request->sobre;
+        }
+        if ($request->has('latitude')) {
+            $userData['latitude'] = $request->latitude;
+        }
+        if ($request->has('longitude')) {
+            $userData['longitude'] = $request->longitude;
+        }
+        if ($request->has('raio_atendimento')) {
+            $userData['raio_atendimento'] = $request->raio_atendimento;
+        }
 
         if (!empty($userData)) {
             $user->update($userData);
         }
 
+        // 🔥 ATUALIZAR DADOS DA TABELA prestador_profiles
         $profile = $user->prestadorProfile()->firstOrCreate(['user_id' => $user->id]);
-        $profileData = $request->only(['endereco']);
 
-        if (!empty($profileData)) {
-            $profile->update($profileData);
+        if ($request->has('endereco')) {
+            $profile->endereco = $request->endereco !== '' ? $request->endereco : null;
+            $profile->save();
+
+            Log::info('Endereço atualizado para prestador', [
+                'user_id' => $user->id,
+                'endereco' => $profile->endereco
+            ]);
         }
 
         NotificationService::send('sistema.perfil_atualizado', $user->id, [
@@ -194,7 +219,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // 🔥 UPLOAD FOTO DE PERFIL (CORRIGIDO)
+    // 🔥 UPLOAD FOTO DE PERFIL
     // ==========================================
 
     public function uploadFoto(Request $request)
@@ -229,8 +254,6 @@ class PrestadorPerfilController extends BaseController
 
             $extension = $file->getClientOriginalExtension();
             $filename = 'perfil_' . $user->id . '_' . time() . '.' . $extension;
-
-            // 🔥 SALVA NA PASTA CORRETA: perfis/prestador/
             $path = $file->storeAs('perfis/prestador', $filename, 'public');
 
             $user->foto = $path;
@@ -243,7 +266,7 @@ class PrestadorPerfilController extends BaseController
             return response()->json([
                 'success' => true,
                 'message' => 'Foto atualizada com sucesso',
-                'data' => ['foto' => $this->getImageUrl($path)] // 🔥 CORRIGIDO
+                'data' => ['foto' => $this->getImageUrl($path)]
             ]);
         }
 
@@ -276,9 +299,10 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * GET /prestador/perfil/stats - Estatísticas
-     */
+    // ==========================================
+    // 🔥 ESTATÍSTICAS
+    // ==========================================
+
     public function stats(Request $request)
     {
         $user = $request->user();
@@ -299,9 +323,10 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * GET /prestador/perfil/categorias - Listar categorias
-     */
+    // ==========================================
+    // 🔥 CATEGORIAS
+    // ==========================================
+
     public function getCategorias(Request $request)
     {
         $user = $request->user();
@@ -322,9 +347,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * POST /prestador/perfil/categorias - Adicionar categoria
-     */
     public function addCategoria(Request $request)
     {
         $user = $request->user();
@@ -356,9 +378,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * DELETE /prestador/perfil/categorias/{id} - Remover categoria
-     */
     public function removeCategoria(Request $request, $categoriaId)
     {
         $user = $request->user();
@@ -378,9 +397,10 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * GET /prestador/perfil/disponibilidade - Buscar disponibilidade
-     */
+    // ==========================================
+    // 🔥 DISPONIBILIDADE
+    // ==========================================
+
     public function getDisponibilidade(Request $request)
     {
         $user = $request->user();
@@ -392,9 +412,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * PUT /prestador/perfil/disponibilidade - Atualizar disponibilidade
-     */
     public function updateDisponibilidade(Request $request)
     {
         $user = $request->user();
@@ -432,12 +449,9 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS CORRIGIDOS
+    // 🔥 PORTFOLIO
     // ==========================================
 
-    /**
-     * Helper: Retorna perfil completo (CORRIGIDO)
-     */
     private function getPerfilCompleto(User $user): array
     {
         $profile = $user->prestadorProfile;
@@ -449,7 +463,7 @@ class PrestadorPerfilController extends BaseController
             'nome' => $user->nome,
             'email' => $user->email,
             'telefone' => $user->telefone,
-            'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
+            'foto' => $this->getImageUrl($user->foto),
             'profissao' => $user->profissao,
             'sobre' => $user->sobre,
             'latitude' => $user->latitude ? (float) $user->latitude : null,
@@ -469,9 +483,6 @@ class PrestadorPerfilController extends BaseController
         ];
     }
 
-    /**
-     * GET /prestador/portfolio - Buscar todas as fotos do portfólio (CORRIGIDO)
-     */
     public function getPortfolio(Request $request)
     {
         $user = $request->user();
@@ -485,7 +496,7 @@ class PrestadorPerfilController extends BaseController
                 $path = ltrim($item, '/');
                 $portfolioItems[] = [
                     'id' => $index + 1,
-                    'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
+                    'url' => $this->getImageUrl($path),
                     'path' => $path,
                     'titulo' => '',
                     'descricao' => '',
@@ -493,10 +504,10 @@ class PrestadorPerfilController extends BaseController
                 ];
             } else {
                 if (isset($item['path'])) {
-                    $item['url'] = $this->getImageUrl($item['path']); // 🔥 CORRIGIDO
+                    $item['url'] = $this->getImageUrl($item['path']);
                 } elseif (isset($item['url'])) {
                     $path = $this->extractPathFromUrl($item['url']);
-                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                    $item['url'] = $this->getImageUrl($path);
                 }
                 $portfolioItems[] = $item;
             }
@@ -508,9 +519,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * POST /prestador/portfolio - Adicionar foto ao portfólio (CORRIGIDO)
-     */
     public function addPortfolio(Request $request)
     {
         $user = $request->user();
@@ -533,15 +541,13 @@ class PrestadorPerfilController extends BaseController
         $file = $request->file('foto');
         $extension = $file->getClientOriginalExtension();
         $filename = Str::random(40) . '.' . $extension;
-
-        // 🔥 SALVA NA PASTA CORRETA: portfolio/{prestador_id}/
         $path = $file->storeAs('portfolio/' . $user->id, $filename, 'public');
 
         $portfolio = $profile->portfolio ?? [];
 
         $newItem = [
             'id' => time() . rand(1000, 9999),
-            'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
+            'url' => $this->getImageUrl($path),
             'path' => $path,
             'titulo' => $request->input('titulo', ''),
             'descricao' => $request->input('descricao', ''),
@@ -563,9 +569,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * PUT /prestador/portfolio/{id} - Atualizar título/descrição do portfólio
-     */
     public function updatePortfolio(Request $request, $id)
     {
         $user = $request->user();
@@ -626,9 +629,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * DELETE /prestador/portfolio/{id} - Remover foto do portfólio por ID
-     */
     public function removePortfolio(Request $request, $id)
     {
         $user = $request->user();
@@ -683,12 +683,9 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // SERVIÇOS
+    // 🔥 SERVIÇOS
     // ==========================================
 
-    /**
-     * POST /prestador/servicos - Criar serviço
-     */
     public function storeServico(Request $request)
     {
         $user = $request->user();
@@ -729,9 +726,6 @@ class PrestadorPerfilController extends BaseController
         ], 201);
     }
 
-    /**
-     * PUT /prestador/servicos/{id} - Atualizar serviço
-     */
     public function updateServico(Request $request, $id)
     {
         $user = $request->user();
@@ -773,9 +767,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * DELETE /prestador/servicos/{id} - Remover serviço
-     */
     public function destroyServico(Request $request, $id)
     {
         $user = $request->user();
@@ -802,9 +793,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * GET /prestador/servicos - Listar serviços
-     */
     public function listServicos(Request $request)
     {
         $user = $request->user();
@@ -819,9 +807,6 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * DELETE /api/prestador/perfil/conta - Excluir conta
-     */
     public function deleteAccount(Request $request)
     {
         $user = $request->user();

@@ -14,32 +14,74 @@ use Illuminate\Auth\Events\PasswordReset;
 class AuthController extends BaseController
 {
     /**
-     * Login do usuário
-     * Aceita email ou telefone
+     * 🔥 HELPER PARA GERAR URL DE IMAGENS
+     */
+    private function getImageUrl(?string $path): ?string
+    {
+        if (empty($path)) {
+            return null;
+        }
+
+        $path = ltrim($path, '/');
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+
+        return url('/imagem/' . $path);
+    }
+
+    /**
+     * 🔥 LOGIN - COM VERIFICAÇÃO DE STATUS E VERIFICADO
      */
     public function login(Request $request)
     {
-        // Validação básica
         $request->validate([
             'email' => 'required_without:telefone|string',
             'telefone' => 'required_without:email|string',
             'password' => 'required|string|min:6',
         ]);
 
-        // Determina o campo de login
         $login = $request->email ?? $request->telefone;
         $isEmail = filter_var($login, FILTER_VALIDATE_EMAIL);
         $field = $isEmail ? 'email' : 'telefone';
 
-        // Busca usuário
         $user = User::where($field, $login)->first();
 
-        // Verifica credenciais
+        // 🔥 VERIFICAR CREDENCIAIS
         if (!$user || !Hash::check($request->password, $user->password)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Email/Telefone ou palavra-passe incorretos'
             ], 401);
+        }
+
+        // 🔥 VERIFICAR STATUS DO UTILIZADOR
+        if ($user->status === 'bloqueado') {
+            return response()->json([
+                'success' => false,
+                'message' => 'A sua conta foi bloqueada. Contacte o suporte.'
+            ], 403);
+        }
+
+        if ($user->status === 'desativado') {
+            return response()->json([
+                'success' => false,
+                'message' => 'A sua conta foi desativada. Contacte o suporte.'
+            ], 403);
+        }
+
+        if ($user->status === 'reprovado') {
+            return response()->json([
+                'success' => false,
+                'message' => 'O seu cadastro foi reprovado. Contacte o suporte.'
+            ], 403);
+        }
+
+        // 🔥 SE FOR PRESTADOR E NÃO VERIFICADO, AVISAR
+        if ($user->tipo === 'prestador' && !$user->verificado) {
+            $aviso = 'A sua conta está pendente de verificação. Algumas funcionalidades podem estar limitadas.';
+        } else {
+            $aviso = null;
         }
 
         // Remove todos tokens antigos
@@ -48,7 +90,6 @@ class AuthController extends BaseController
         // Cria novo token
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // Retorna resposta com URL completa da foto
         return response()->json([
             'success' => true,
             'token' => $token,
@@ -57,12 +98,15 @@ class AuthController extends BaseController
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto),
                 'tipo' => $user->tipo,
+                'status' => $user->status,
+                'verificado' => (bool) $user->verificado, // 🔥 FORÇA BOOLEAN
                 'email_verified_at' => $user->email_verified_at,
                 'created_at' => $user->created_at,
                 'updated_at' => $user->updated_at,
-            ]
+            ],
+            'aviso' => $aviso,
         ]);
     }
 
@@ -87,7 +131,7 @@ class AuthController extends BaseController
     }
 
     /**
-     * Verifica token e retorna usuário
+     * 🔥 VERIFY - COM VERIFICAÇÃO
      */
     public function verify(Request $request)
     {
@@ -102,8 +146,10 @@ class AuthController extends BaseController
                     'nome' => $user->nome,
                     'email' => $user->email,
                     'telefone' => $user->telefone,
-                    'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                    'foto' => $this->getImageUrl($user->foto),
                     'tipo' => $user->tipo,
+                    'status' => $user->status,
+                    'verificado' => (bool) $user->verificado, // 🔥 FORÇA BOOLEAN
                 ]
             ]);
         }
@@ -203,26 +249,20 @@ class AuthController extends BaseController
     }
 
     /**
-     * Registro de novo usuário - CORRIGIDO (sem confirmed)
+     * 🔥 REGISTRO - COM STATUS E VERIFICADO
      */
     public function register(Request $request)
     {
-        // Validação base - REMOVIDO 'confirmed' da validação de password
         $request->validate([
             'nome' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
             'telefone' => 'required|string|unique:users,telefone',
-            'password' => 'required|string|min:6', // ← 'confirmed' REMOVIDO
-
-            // Campos opcionais
+            'password' => 'required|string|min:6',
             'endereco' => 'nullable|string',
             'foto' => 'nullable|image|max:5120',
-
-            // Campos específicos para prestador
             'sobre' => 'nullable|string',
             'profissao' => 'nullable|string',
             'raio_atendimento' => 'nullable|integer|min:1|max:100',
-            // ✅ TORNAR OBRIGATÓRIO
             'latitude' => 'required|numeric',
             'longitude' => 'required|numeric',
             'categorias' => 'nullable|json',
@@ -231,7 +271,7 @@ class AuthController extends BaseController
             'documento' => 'nullable|file|max:10240',
         ]);
 
-        // ========== DETECTAR TIPO DE PERFIL AUTOMATICAMENTE ==========
+        // ========== DETECTAR TIPO DE PERFIL ==========
         $temDadosPrestador = $request->has('categorias') ||
             $request->has('disponibilidade') ||
             $request->hasFile('portfolio') ||
@@ -241,30 +281,35 @@ class AuthController extends BaseController
 
         $tipo = $temDadosPrestador ? 'prestador' : 'cliente';
 
-        // ========== CRIAR USUÁRIO BASE ==========
+        // ========== CRIAR USUÁRIO ==========
         $userData = [
             'nome' => $request->nome,
             'email' => $request->email,
             'telefone' => $request->telefone,
             'password' => Hash::make($request->password),
             'tipo' => $tipo,
+            'status' => 'ativo', // 🔥 STATUS PADRÃO
+            'verificado' => $tipo === 'cliente', // 🔥 CLIENTE JÁ VERIFICADO
         ];
 
         $user = User::create($userData);
 
-        // ========== PROCESSAR FOTO (comum para ambos) ==========
+        // ========== PROCESSAR FOTO ==========
         if ($request->hasFile('foto')) {
             $path = $request->file('foto')->store('usuarios', 'public');
             $user->foto = $path;
             $user->save();
         }
 
-        // ========== PROCESSAR DADOS ESPECÍFICOS DE PRESTADOR ==========
+        // ========== PROCESSAR DADOS DO PRESTADOR ==========
         if ($tipo === 'prestador') {
-            // Criar ou obter o perfil do prestador
-            $prestadorProfile = $user->prestadorProfile()->create();
+            // 🔥 PRESTADOR FICA PENDENTE
+            $user->verificado = false;
+            $user->status = 'pendente';
+            $user->save();
 
-            // Salvar campos no perfil do prestador
+            $profile = $user->prestadorProfile()->create();
+
             $profileData = [];
 
             if ($request->has('sobre')) {
@@ -287,7 +332,6 @@ class AuthController extends BaseController
                 $profileData['longitude'] = $request->longitude;
             }
 
-            // Salvar disponibilidade
             if ($request->has('disponibilidade')) {
                 $disponibilidade = json_decode($request->disponibilidade, true);
                 if (is_array($disponibilidade)) {
@@ -295,9 +339,8 @@ class AuthController extends BaseController
                 }
             }
 
-            // Atualizar perfil com os dados
             if (!empty($profileData)) {
-                $prestadorProfile->update($profileData);
+                $profile->update($profileData);
             }
 
             // Processar categorias
@@ -308,36 +351,35 @@ class AuthController extends BaseController
                 }
             }
 
-            // Processar portfolio (múltiplas imagens)
+            // Processar portfolio
             if ($request->hasFile('portfolio')) {
                 $portfolioPaths = [];
                 foreach ($request->file('portfolio') as $file) {
                     $path = $file->store('portfolio/' . $user->id, 'public');
                     $portfolioPaths[] = $path;
                 }
-                $prestadorProfile->portfolio = $portfolioPaths;
-                $prestadorProfile->save();
+                $profile->portfolio = $portfolioPaths;
+                $profile->save();
             }
 
             // Processar documento
             if ($request->hasFile('documento')) {
                 $documentoPath = $request->file('documento')->store('documentos/' . $user->id, 'public');
-                $prestadorProfile->documento = $documentoPath;
-                $prestadorProfile->status_documento = 'pendente';
-                $prestadorProfile->save();
+                $profile->documento = $documentoPath;
+                $profile->status_documento = 'pendente';
+                $profile->save();
             }
         }
 
-        // ========== PROCESSAR ENDEREÇO (se for cliente) ==========
+        // ========== PROCESSAR ENDEREÇO (CLIENTE) ==========
         if ($tipo === 'cliente' && $request->has('endereco')) {
-            // Criar endereço para o cliente
             $user->enderecos()->create([
                 'endereco' => $request->endereco,
                 'principal' => true,
             ]);
         }
 
-        // ========== NOTIFICAÇÃO DE BOAS-VINDAS ==========
+        // ========== NOTIFICAÇÃO ==========
         NotificationService::send('sistema.bem_vindo', $user->id, [
             'nome' => $user->nome
         ]);
@@ -345,30 +387,31 @@ class AuthController extends BaseController
         // ========== RESPOSTA ==========
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        // Preparar dados adicionais se for prestador
         $userDataResponse = [
             'id' => $user->id,
             'nome' => $user->nome,
             'email' => $user->email,
             'telefone' => $user->telefone,
-            'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+            'foto' => $this->getImageUrl($user->foto),
             'tipo' => $user->tipo,
+            'status' => $user->status,
+            'verificado' => (bool) $user->verificado, // 🔥 FORÇA BOOLEAN
         ];
 
-        // Adicionar dados do prestador se aplicável
         if ($tipo === 'prestador' && $user->prestadorProfile) {
             $userDataResponse['sobre'] = $user->prestadorProfile->sobre;
             $userDataResponse['profissao'] = $user->prestadorProfile->profissao;
             $userDataResponse['raio_atendimento'] = $user->prestadorProfile->raio_atendimento;
             $userDataResponse['disponivel'] = $user->prestadorProfile->disponivel;
-            $userDataResponse['verificado'] = $user->prestadorProfile->verificado;
             $userDataResponse['media_avaliacao'] = $user->prestadorProfile->media_avaliacao;
             $userDataResponse['total_avaliacoes'] = $user->prestadorProfile->total_avaliacoes;
         }
 
         return response()->json([
             'success' => true,
-            'message' => 'Registo efetuado com sucesso!',
+            'message' => $tipo === 'prestador'
+                ? 'Registo efetuado! Aguarde a verificação da sua conta.'
+                : 'Registo efetuado com sucesso!',
             'token' => $token,
             'user' => $userDataResponse
         ], 201);
@@ -413,8 +456,10 @@ class AuthController extends BaseController
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto),
                 'tipo' => $user->tipo,
+                'status' => $user->status,
+                'verificado' => (bool) $user->verificado, // 🔥 FORÇA BOOLEAN
             ]
         ]);
     }
@@ -431,7 +476,6 @@ class AuthController extends BaseController
         $user = $request->user();
 
         if ($request->hasFile('foto')) {
-            // Remover foto antiga se existir
             if ($user->foto) {
                 Storage::disk('public')->delete($user->foto);
             }
@@ -447,7 +491,7 @@ class AuthController extends BaseController
             return response()->json([
                 'success' => true,
                 'message' => 'Foto atualizada com sucesso!',
-                'foto' => asset('storage/' . $path)
+                'foto' => $this->getImageUrl($path)
             ]);
         }
 
@@ -458,7 +502,7 @@ class AuthController extends BaseController
     }
 
     /**
-     * Retorna os dados do usuário autenticado
+     * 🔥 USER - COM VERIFICAÇÃO
      */
     public function user(Request $request)
     {
@@ -471,8 +515,10 @@ class AuthController extends BaseController
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto),
                 'tipo' => $user->tipo,
+                'status' => $user->status,
+                'verificado' => (bool) $user->verificado, // 🔥 FORÇA BOOLEAN
                 'created_at' => $user->created_at,
                 'updated_at' => $user->updated_at,
             ]
