@@ -15,6 +15,47 @@ use Illuminate\Support\Facades\Log;
 
 class PerfilController extends BaseController
 {
+    // ==========================================
+    // 🔥 HELPER PARA GERAR URL DE IMAGENS
+    // ==========================================
+
+    /**
+     * Gera URL correta para imagens usando a rota /imagem
+     */
+    private function getImageUrl(?string $path): ?string
+    {
+        if (empty($path)) {
+            return null;
+        }
+
+        // Limpa o path
+        $path = ltrim($path, '/');
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = str_replace('usuarios/', '', $path);
+
+        // 🔥 USA A ROTA /imagem
+        return url('/imagem/' . $path);
+    }
+
+    /**
+     * Limpa o caminho do storage
+     */
+    private function cleanStoragePath(string $path): string
+    {
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = str_replace('usuarios/', '', $path);
+        $path = ltrim($path, '/');
+        return $path;
+    }
+
+    // ==========================================
+    // 🔥 PERFIL - SHOW (CORRIGIDO)
+    // ==========================================
+
     /**
      * GET /cliente/perfil
      * Obter dados do perfil do usuário logado (INCLUINDO ENDEREÇO)
@@ -28,7 +69,6 @@ class PerfilController extends BaseController
             ->where('principal', true)
             ->first();
 
-        // Se não tiver endereço principal, pega o primeiro endereço
         if (!$enderecoPrincipal) {
             $enderecoPrincipal = $user->enderecos()->first();
         }
@@ -41,7 +81,7 @@ class PerfilController extends BaseController
                 'email' => $user->email,
                 'telefone' => $user->telefone,
                 'tipo' => $user->tipo,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
                 'created_at' => $user->created_at,
                 'profissao' => $user->profissao,
                 'sobre' => $user->sobre,
@@ -61,6 +101,10 @@ class PerfilController extends BaseController
             ]
         ]);
     }
+
+    // ==========================================
+    // 🔥 ATUALIZAR PERFIL
+    // ==========================================
 
     /**
      * PUT /cliente/perfil
@@ -137,7 +181,7 @@ class PerfilController extends BaseController
                 'email' => $user->email,
                 'telefone' => $user->telefone,
                 'tipo' => $user->tipo,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
                 'profissao' => $user->profissao,
                 'sobre' => $user->sobre,
                 'endereco' => $enderecoPrincipal ? [
@@ -155,29 +199,20 @@ class PerfilController extends BaseController
         ]);
     }
 
+    // ==========================================
+    // 🔥 UPLOAD FOTO - CORRIGIDO
+    // ==========================================
+
     /**
      * POST /cliente/perfil/foto
-     * Atualizar foto do perfil - CORRIGIDO
+     * Atualizar foto do perfil
      */
     public function uploadFoto(Request $request)
     {
         $user = $request->user();
 
-        // 🔥 LOG PARA DIAGNÓSTICO
         Log::info('📸 Upload de foto iniciado para usuário: ' . $user->id);
-        Log::info('Has file? ' . ($request->hasFile('foto') ? 'SIM' : 'NÃO'));
 
-        if ($request->hasFile('foto')) {
-            $file = $request->file('foto');
-            Log::info('File details:', [
-                'name' => $file->getClientOriginalName(),
-                'size' => $file->getSize(),
-                'mime' => $file->getMimeType(),
-                'error' => $file->getError(),
-            ]);
-        }
-
-        // 🔥 VALIDAÇÃO CORRIGIDA
         try {
             $validated = $request->validate([
                 'foto' => 'required|image|max:5120|mimes:jpeg,png,jpg,gif'
@@ -193,19 +228,27 @@ class PerfilController extends BaseController
 
         // 🔥 REMOVER FOTO ANTIGA
         if ($user->foto) {
-            $oldPath = str_replace('storage/', '', $user->foto);
-            $oldPath = str_replace(asset('storage/'), '', $oldPath);
-            $oldPath = ltrim($oldPath, '/');
+            $oldPath = $this->cleanStoragePath($user->foto);
 
+            // Tenta remover da nova pasta (perfis/cliente/)
             if (Storage::disk('public')->exists($oldPath)) {
                 Storage::disk('public')->delete($oldPath);
                 Log::info('🗑️ Foto antiga removida: ' . $oldPath);
             }
+
+            // Tenta remover da pasta antiga (usuarios/) - fallback
+            $oldPathFallback = 'usuarios/' . basename($user->foto);
+            if (Storage::disk('public')->exists($oldPathFallback)) {
+                Storage::disk('public')->delete($oldPathFallback);
+                Log::info('🗑️ Foto antiga removida (fallback): ' . $oldPathFallback);
+            }
         }
 
-        // 🔥 SALVAR NOVA FOTO
+        // 🔥 SALVAR NA PASTA CORRETA: perfis/cliente/
         $file = $request->file('foto');
-        $path = $file->store('usuarios', 'public');
+        $extension = $file->getClientOriginalExtension();
+        $filename = 'perfil_' . $user->id . '_' . time() . '.' . $extension;
+        $path = $file->storeAs('perfis/cliente', $filename, 'public');
 
         Log::info('📁 Foto salva em: ' . $path);
 
@@ -217,17 +260,19 @@ class PerfilController extends BaseController
             'nome' => $user->nome
         ]);
 
-        // 🔥 RETORNAR URL COMPLETA
-        $fotoUrl = asset('storage/' . $path);
-
+        // 🔥 RETORNAR URL COMPLETA USANDO /imagem
         return response()->json([
             'success' => true,
             'message' => 'Foto atualizada com sucesso!',
             'data' => [
-                'foto' => $fotoUrl
+                'foto' => $this->getImageUrl($path) // 🔥 CORRIGIDO
             ]
         ]);
     }
+
+    // ==========================================
+    // 🔥 REMOVER FOTO
+    // ==========================================
 
     /**
      * DELETE /cliente/perfil/foto
@@ -238,13 +283,19 @@ class PerfilController extends BaseController
         $user = $request->user();
 
         if ($user->foto) {
-            $path = str_replace('storage/', '', $user->foto);
-            $path = str_replace(asset('storage/'), '', $path);
-            $path = ltrim($path, '/');
+            $path = $this->cleanStoragePath($user->foto);
 
+            // Tenta remover da nova pasta
             if (Storage::disk('public')->exists($path)) {
                 Storage::disk('public')->delete($path);
                 Log::info('🗑️ Foto removida: ' . $path);
+            }
+
+            // Tenta remover da pasta antiga - fallback
+            $pathFallback = 'usuarios/' . basename($user->foto);
+            if (Storage::disk('public')->exists($pathFallback)) {
+                Storage::disk('public')->delete($pathFallback);
+                Log::info('🗑️ Foto removida (fallback): ' . $pathFallback);
             }
 
             $user->foto = null;
@@ -256,6 +307,10 @@ class PerfilController extends BaseController
             'message' => 'Foto removida com sucesso!'
         ]);
     }
+
+    // ==========================================
+    // 🔥 DASHBOARD
+    // ==========================================
 
     /**
      * GET /cliente/perfil/dashboard
@@ -286,7 +341,9 @@ class PerfilController extends BaseController
         ]);
     }
 
-    // ===================== ENDEREÇOS =====================
+    // ==========================================
+    // 🔥 ENDEREÇOS
+    // ==========================================
 
     /**
      * GET /cliente/enderecos
@@ -429,7 +486,9 @@ class PerfilController extends BaseController
         ]);
     }
 
-    // ===================== CONFIGURAÇÕES =====================
+    // ==========================================
+    // 🔥 CONFIGURAÇÕES
+    // ==========================================
 
     /**
      * GET /cliente/configuracoes

@@ -15,6 +15,56 @@ use Illuminate\Validation\Rule;
 
 class AdminPerfilController extends Controller
 {
+    // ==========================================
+    // 🔥 HELPER PARA GERAR URL DE IMAGENS (CORRIGIDO)
+    // ==========================================
+
+    /**
+     * Gera URL correta para imagens usando a rota /imagem
+     */
+    private function getImageUrl(?string $path): ?string
+    {
+        if (empty($path)) {
+            return null;
+        }
+
+        // 🔥 LIMPAR O PATH COMPLETAMENTE
+        $path = ltrim($path, '/');
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = str_replace('perfil-fotos/', '', $path);
+
+        // 🔥 REMOVER QUALQUER DUPLICAÇÃO DE "perfis/"
+        $path = preg_replace('#perfis/+#', 'perfis/', $path);
+
+        // 🔥 GARANTIR QUE O PATH COMEÇA COM A PASTA CORRETA
+        // Se não começar com perfis/, adiciona
+        if (!str_starts_with($path, 'perfis/')) {
+            $path = 'perfis/' . ltrim($path, '/');
+        }
+
+        // 🔥 USA A ROTA /imagem
+        return url('/imagem/' . $path);
+    }
+
+    /**
+     * Limpa o caminho do storage
+     */
+    private function cleanStoragePath(string $path): string
+    {
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = str_replace('perfil-fotos/', '', $path);
+        $path = ltrim($path, '/');
+        return $path;
+    }
+
+    // ==========================================
+    // 🔥 PERFIL - GET
+    // ==========================================
+
     /**
      * GET /admin/perfil
      * Obter dados do perfil do usuário logado
@@ -36,7 +86,7 @@ class AdminPerfilController extends Controller
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone ?? '',
-                'foto' => $user->foto ? url($user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto),
                 'tipo' => $user->tipo ?? 'admin',
                 'verificado' => (bool) ($user->verificado ?? false),
                 'created_at' => $user->created_at,
@@ -55,6 +105,10 @@ class AdminPerfilController extends Controller
             ], 500);
         }
     }
+
+    // ==========================================
+    // 🔥 ATUALIZAR PERFIL
+    // ==========================================
 
     /**
      * PUT /admin/perfil
@@ -113,7 +167,7 @@ class AdminPerfilController extends Controller
                     'nome' => $userModel->nome,
                     'email' => $userModel->email,
                     'telefone' => $userModel->telefone ?? '',
-                    'foto' => $userModel->foto ? asset($userModel->foto) : null,
+                    'foto' => $this->getImageUrl($userModel->foto),
                     'tipo' => $userModel->tipo,
                     'verificado' => (bool) $userModel->verificado,
                     'created_at' => $userModel->created_at,
@@ -198,6 +252,10 @@ class AdminPerfilController extends Controller
         }
     }
 
+    // ==========================================
+    // 🔥 ATUALIZAR FOTO - CORRIGIDO
+    // ==========================================
+
     /**
      * POST /admin/perfil/foto
      * Atualizar foto do perfil
@@ -227,28 +285,42 @@ class AdminPerfilController extends Controller
                 ], 404);
             }
 
-            // Remover foto antiga
+            // 🔥 REMOVER FOTO ANTIGA
             if ($userModel->foto) {
-                $oldPath = str_replace('storage/', '', $userModel->foto);
+                $oldPath = $this->cleanStoragePath($userModel->foto);
+
+                // Tenta remover da nova pasta
                 if (Storage::disk('public')->exists($oldPath)) {
                     Storage::disk('public')->delete($oldPath);
+                    Log::info('🗑️ Foto antiga do admin removida: ' . $oldPath);
+                }
+
+                // Tenta remover da pasta antiga (fallback)
+                $oldPathFallback = 'perfil-fotos/' . basename($userModel->foto);
+                if (Storage::disk('public')->exists($oldPathFallback)) {
+                    Storage::disk('public')->delete($oldPathFallback);
+                    Log::info('🗑️ Foto antiga do admin removida (fallback): ' . $oldPathFallback);
                 }
             }
 
-            // Salvar nova foto
+            // 🔥 SALVAR NA PASTA CORRETA: perfis/admin/
             $file = $request->file('foto');
-            $path = $file->store('perfil-fotos', 'public');
+            $extension = $file->getClientOriginalExtension();
+            $filename = 'admin_' . $user->id . '_' . time() . '.' . $extension;
+            $path = $file->storeAs('perfis/admin', $filename, 'public');
 
-            // 🔥 AQUI É A CORREÇÃO - Salvar apenas o caminho relativo
-            $userModel->foto = 'storage/' . $path;
+            Log::info('📁 Foto do admin salva em: ' . $path);
+
+            // 🔥 SALVAR APENAS O CAMINHO RELATIVO
+            $userModel->foto = $path;
             $userModel->save();
 
-            // Gerar URL completa para retornar
-            $fotoUrl = url($userModel->foto);
+            $this->registrarAtividade('atualizacao', 'Foto de perfil atualizada');
 
+            // 🔥 RETORNAR URL COMPLETA USANDO /imagem
             return response()->json([
                 'success' => true,
-                'foto' => $fotoUrl,
+                'foto' => $this->getImageUrl($path),
                 'message' => 'Foto atualizada com sucesso'
             ]);
         } catch (\Exception $e) {
@@ -259,6 +331,10 @@ class AdminPerfilController extends Controller
             ], 500);
         }
     }
+
+    // ==========================================
+    // 🔥 ATIVIDADES
+    // ==========================================
 
     /**
      * GET /admin/atividades
@@ -313,6 +389,10 @@ class AdminPerfilController extends Controller
             ], 500);
         }
     }
+
+    // ==========================================
+    // 🔥 MÉTODO PRIVADO PARA REGISTRAR ATIVIDADES
+    // ==========================================
 
     /**
      * Método privado para registrar atividades

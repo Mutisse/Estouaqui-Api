@@ -13,38 +13,109 @@ use Illuminate\Support\Str;
 
 class PrestadorPerfilController extends BaseController
 {
+    // ==========================================
+    // 🔥 HELPER PARA GERAR URL DE IMAGENS
+    // ==========================================
+
     /**
-     * GET /prestador/perfil - Buscar perfil completo
+     * Gera URL correta para imagens usando a rota /imagem
      *
-     * 🔥 RETORNA TODOS OS DADOS DO PRESTADOR:
-     * - Dados da tabela users (nome, email, telefone, foto, profissao,
-     *   latitude, longitude, raio_atendimento, disponivel, verificado,
-     *   media_avaliacao, total_avaliacoes, sobre)
-     * - Dados da tabela prestador_profiles (endereco, portfolio,
-     *   disponibilidade, documento_verificado)
+     * @param string|null $path Caminho da imagem (ex: "perfis/prestador/foto.jpg")
+     * @return string|null URL completa da imagem
      */
+    private function getImageUrl(?string $path): ?string
+    {
+        if (empty($path)) {
+            return null;
+        }
+
+        // Limpa o path (remove qualquer prefixo indesejado)
+        $path = ltrim($path, '/');
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+
+        // 🔥 USA A ROTA /imagem (NÃO secure_asset)
+        return url('/imagem/' . $path);
+    }
+
+    /**
+     * Extrai o path de uma URL
+     */
+    private function extractPathFromUrl(string $url): string
+    {
+        $path = parse_url($url, PHP_URL_PATH) ?? $url;
+        $path = str_replace('/storage/', '', $path);
+        $path = str_replace('/imagem/', '', $path);
+        $path = ltrim($path, '/');
+        return $path;
+    }
+
+    /**
+     * Limpa o caminho do storage
+     */
+    private function cleanStoragePath(string $path): string
+    {
+        $path = str_replace('storage/', '', $path);
+        $path = str_replace('public/', '', $path);
+        $path = str_replace('app/public/', '', $path);
+        $path = ltrim($path, '/');
+        return $path;
+    }
+
+    /**
+     * Processa URLs do portfólio (CORRIGIDO)
+     */
+    private function processPortfolioUrls(array $portfolio): array
+    {
+        $result = [];
+        foreach ($portfolio as $index => $item) {
+            if (is_string($item)) {
+                $path = $this->cleanStoragePath($item);
+                $result[] = [
+                    'id' => $index + 1,
+                    'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
+                    'path' => $path,
+                    'titulo' => '',
+                    'descricao' => '',
+                    'created_at' => now()->toISOString()
+                ];
+            } elseif (is_array($item)) {
+                if (isset($item['path'])) {
+                    $path = $this->cleanStoragePath($item['path']);
+                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                } elseif (isset($item['url'])) {
+                    $path = $this->extractPathFromUrl($item['url']);
+                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                }
+                $result[] = $item;
+            }
+        }
+        return $result;
+    }
+
+    // ==========================================
+    // 🔥 PERFIL - SHOW (CORRIGIDO)
+    // ==========================================
+
     public function show(Request $request)
     {
         $user = $request->user();
         $profile = $user->prestadorProfile;
 
-        // Processar portfolio para URLs completas
         $portfolio = $profile ? ($profile->portfolio ?? []) : [];
         $portfolioUrls = $this->processPortfolioUrls($portfolio);
 
         return response()->json([
             'success' => true,
             'data' => [
-                // ==========================================================
-                // 🔥 DADOS DA TABELA USERS
-                // ==========================================================
                 'id' => $user->id,
                 'nome' => $user->nome,
                 'email' => $user->email,
                 'telefone' => $user->telefone,
-                'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+                'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
                 'profissao' => $user->profissao,
-                'sobre' => $user->sobre,  // ✅ SOBRE ESTÁ NA TABELA USERS
+                'sobre' => $user->sobre,
                 'latitude' => $user->latitude ? (float) $user->latitude : null,
                 'longitude' => $user->longitude ? (float) $user->longitude : null,
                 'raio_atendimento' => $user->raio_atendimento ?? 10,
@@ -54,10 +125,6 @@ class PrestadorPerfilController extends BaseController
                 'total_avaliacoes' => $user->total_avaliacoes ?? 0,
                 'created_at' => $user->created_at,
                 'updated_at' => $user->updated_at,
-
-                // ==========================================================
-                // 🔥 DADOS DA TABELA prestador_profiles
-                // ==========================================================
                 'endereco' => $profile ? $profile->endereco : null,
                 'portfolio' => $portfolioUrls,
                 'disponibilidade' => $profile ? ($profile->disponibilidade ?? null) : null,
@@ -69,8 +136,6 @@ class PrestadorPerfilController extends BaseController
 
     /**
      * PUT /prestador/perfil - Atualizar perfil
-     *
-     * 🔥 PERMITE ATUALIZAR TODOS OS CAMPOS
      */
     public function update(Request $request)
     {
@@ -95,15 +160,12 @@ class PrestadorPerfilController extends BaseController
             ], 422);
         }
 
-        // ==========================================================
-        // 🔥 ATUALIZAR DADOS DA TABELA USERS
-        // ==========================================================
         $userData = $request->only([
             'nome',
             'email',
             'telefone',
             'profissao',
-            'sobre',      // ✅ SOBRE ESTÁ NA TABELA USERS
+            'sobre',
             'latitude',
             'longitude',
             'raio_atendimento'
@@ -113,9 +175,6 @@ class PrestadorPerfilController extends BaseController
             $user->update($userData);
         }
 
-        // ==========================================================
-        // 🔥 ATUALIZAR DADOS DA TABELA prestador_profiles
-        // ==========================================================
         $profile = $user->prestadorProfile()->firstOrCreate(['user_id' => $user->id]);
         $profileData = $request->only(['endereco']);
 
@@ -127,9 +186,6 @@ class PrestadorPerfilController extends BaseController
             'nome' => $user->nome,
         ]);
 
-        // ==========================================================
-        // 🔥 RETORNAR DADOS ATUALIZADOS COMPLETOS
-        // ==========================================================
         return response()->json([
             'success' => true,
             'message' => 'Perfil atualizado com sucesso',
@@ -137,9 +193,10 @@ class PrestadorPerfilController extends BaseController
         ]);
     }
 
-    /**
-     * POST /prestador/perfil/foto - Upload de foto de perfil
-     */
+    // ==========================================
+    // 🔥 UPLOAD FOTO DE PERFIL (CORRIGIDO)
+    // ==========================================
+
     public function uploadFoto(Request $request)
     {
         $user = $request->user();
@@ -172,7 +229,9 @@ class PrestadorPerfilController extends BaseController
 
             $extension = $file->getClientOriginalExtension();
             $filename = 'perfil_' . $user->id . '_' . time() . '.' . $extension;
-            $path = $file->storeAs('usuarios', $filename, 'public');
+
+            // 🔥 SALVA NA PASTA CORRETA: perfis/prestador/
+            $path = $file->storeAs('perfis/prestador', $filename, 'public');
 
             $user->foto = $path;
             $user->save();
@@ -184,7 +243,7 @@ class PrestadorPerfilController extends BaseController
             return response()->json([
                 'success' => true,
                 'message' => 'Foto atualizada com sucesso',
-                'data' => ['foto' => asset('storage/' . $path)]
+                'data' => ['foto' => $this->getImageUrl($path)] // 🔥 CORRIGIDO
             ]);
         }
 
@@ -373,53 +432,11 @@ class PrestadorPerfilController extends BaseController
     }
 
     // ==========================================
-    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS
+    // ⭐ PORTFOLIO - MÉTODOS COMPLETOS CORRIGIDOS
     // ==========================================
 
     /**
-     * Helper: Processa URLs do portfólio
-     */
-    private function processPortfolioUrls(array $portfolio): array
-    {
-        $result = [];
-        foreach ($portfolio as $index => $item) {
-            if (is_string($item)) {
-                $path = $this->cleanStoragePath($item);
-                $result[] = [
-                    'id' => $index + 1,
-                    'url' => asset('storage/' . $path),
-                    'path' => $path,
-                    'titulo' => '',
-                    'descricao' => '',
-                    'created_at' => now()->toISOString()
-                ];
-            } elseif (is_array($item)) {
-                if (isset($item['path'])) {
-                    $path = $this->cleanStoragePath($item['path']);
-                    $item['url'] = asset('storage/' . $path);
-                } elseif (isset($item['url'])) {
-                    // Se já tem URL, mantém
-                }
-                $result[] = $item;
-            }
-        }
-        return $result;
-    }
-
-    /**
-     * Helper: Limpa o caminho do storage
-     */
-    private function cleanStoragePath(string $path): string
-    {
-        $path = str_replace('storage/', '', $path);
-        $path = str_replace('public/', '', $path);
-        $path = str_replace('app/public/', '', $path);
-        $path = ltrim($path, '/');
-        return $path;
-    }
-
-    /**
-     * Helper: Retorna perfil completo
+     * Helper: Retorna perfil completo (CORRIGIDO)
      */
     private function getPerfilCompleto(User $user): array
     {
@@ -432,7 +449,7 @@ class PrestadorPerfilController extends BaseController
             'nome' => $user->nome,
             'email' => $user->email,
             'telefone' => $user->telefone,
-            'foto' => $user->foto ? asset('storage/' . $user->foto) : null,
+            'foto' => $this->getImageUrl($user->foto), // 🔥 CORRIGIDO
             'profissao' => $user->profissao,
             'sobre' => $user->sobre,
             'latitude' => $user->latitude ? (float) $user->latitude : null,
@@ -453,7 +470,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     /**
-     * GET /prestador/portfolio - Buscar todas as fotos do portfólio
+     * GET /prestador/portfolio - Buscar todas as fotos do portfólio (CORRIGIDO)
      */
     public function getPortfolio(Request $request)
     {
@@ -466,16 +483,21 @@ class PrestadorPerfilController extends BaseController
         foreach ($portfolio as $index => $item) {
             if (is_string($item)) {
                 $path = ltrim($item, '/');
-                $url = url('/storage/' . $path);
                 $portfolioItems[] = [
                     'id' => $index + 1,
-                    'url' => $url,
+                    'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
                     'path' => $path,
                     'titulo' => '',
                     'descricao' => '',
                     'created_at' => now()->toISOString()
                 ];
             } else {
+                if (isset($item['path'])) {
+                    $item['url'] = $this->getImageUrl($item['path']); // 🔥 CORRIGIDO
+                } elseif (isset($item['url'])) {
+                    $path = $this->extractPathFromUrl($item['url']);
+                    $item['url'] = $this->getImageUrl($path); // 🔥 CORRIGIDO
+                }
                 $portfolioItems[] = $item;
             }
         }
@@ -487,7 +509,7 @@ class PrestadorPerfilController extends BaseController
     }
 
     /**
-     * POST /prestador/portfolio - Adicionar foto ao portfólio
+     * POST /prestador/portfolio - Adicionar foto ao portfólio (CORRIGIDO)
      */
     public function addPortfolio(Request $request)
     {
@@ -511,13 +533,15 @@ class PrestadorPerfilController extends BaseController
         $file = $request->file('foto');
         $extension = $file->getClientOriginalExtension();
         $filename = Str::random(40) . '.' . $extension;
+
+        // 🔥 SALVA NA PASTA CORRETA: portfolio/{prestador_id}/
         $path = $file->storeAs('portfolio/' . $user->id, $filename, 'public');
 
         $portfolio = $profile->portfolio ?? [];
 
         $newItem = [
             'id' => time() . rand(1000, 9999),
-            'url' => asset('storage/' . $path),
+            'url' => $this->getImageUrl($path), // 🔥 CORRIGIDO
             'path' => $path,
             'titulo' => $request->input('titulo', ''),
             'descricao' => $request->input('descricao', ''),
@@ -536,6 +560,69 @@ class PrestadorPerfilController extends BaseController
             'success' => true,
             'message' => 'Foto adicionada ao portfólio',
             'data' => $newItem
+        ]);
+    }
+
+    /**
+     * PUT /prestador/portfolio/{id} - Atualizar título/descrição do portfólio
+     */
+    public function updatePortfolio(Request $request, $id)
+    {
+        $user = $request->user();
+        $profile = $user->prestadorProfile;
+
+        if (!$profile) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Perfil não encontrado'
+            ], 404);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'titulo' => 'nullable|string|max:255',
+            'descricao' => 'nullable|string|max:500',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $portfolio = $profile->portfolio ?? [];
+        $itemEncontrado = null;
+        $indexEncontrado = -1;
+
+        foreach ($portfolio as $index => $item) {
+            if (isset($item['id']) && (string) $item['id'] === (string) $id) {
+                $itemEncontrado = $item;
+                $indexEncontrado = $index;
+                break;
+            }
+        }
+
+        if ($indexEncontrado === -1) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Item não encontrado no portfólio'
+            ], 404);
+        }
+
+        $portfolio[$indexEncontrado]['titulo'] = $request->input('titulo', $itemEncontrado['titulo'] ?? '');
+        $portfolio[$indexEncontrado]['descricao'] = $request->input('descricao', $itemEncontrado['descricao'] ?? '');
+
+        $profile->portfolio = $portfolio;
+        $profile->save();
+
+        NotificationService::send('portfolio.atualizado', $user->id, [
+            'nome' => $user->nome,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Portfólio atualizado com sucesso',
+            'data' => $portfolio[$indexEncontrado]
         ]);
     }
 

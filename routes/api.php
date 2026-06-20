@@ -130,7 +130,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::patch('/pedidos/{id}/status', [PedidoController::class, 'updateStatus']);
         Route::delete('/pedidos/{id}', [PedidoController::class, 'destroy']);
 
-    
+
         // 🔥 PROPOSTAS CLIENTE - ORDEM CORRETA
         Route::get('/propostas', [ClientePropostaController::class, 'index']);
         // 🔥 PRIMEIRO: ROTAS ESPECÍFICAS (sem parâmetros)
@@ -279,6 +279,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // ⭐ PORTFOLIO
         Route::get('/portfolio', [PrestadorPerfilController::class, 'getPortfolio']);
         Route::post('/portfolio', [PrestadorPerfilController::class, 'addPortfolio']);
+        Route::put('/portfolio/{id}', [PrestadorPerfilController::class, 'updatePortfolio']);
         Route::delete('/portfolio/{id}', [PrestadorPerfilController::class, 'removePortfolio']);
 
         // Notificações Prestador
@@ -528,16 +529,3 @@ Route::get('/health', function () {
     ]);
 });
 
-// ==========================================
-// ROTA ESPECÍFICA PARA SERVIR IMAGENS DO STORAGE
-// ==========================================
-// Rota para servir imagens sem storage:link
-Route::get('/imagem/{path}', function ($path) {
-    $fullPath = storage_path('app/public/' . $path);
-
-    if (!file_exists($fullPath)) {
-        abort(404);
-    }
-
-    return response()->file($fullPath);
-})->where('path', '.*');
