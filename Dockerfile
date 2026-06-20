@@ -22,13 +22,42 @@ RUN mkdir -p database && touch database/database.sqlite
 # Instalar dependências
 RUN composer install --no-interaction --optimize-autoloader --no-dev
 
-# Cache (ignorando erros de banco de dados)
-RUN php artisan config:cache || true
+# ============================================================
+# 🔥 RODAR MIGRATIONS E SEEDERS
+# ============================================================
+# Limpar cache antes
+RUN php artisan config:clear || true
+RUN php artisan cache:clear || true
 
-# Permissões
+# Rodar migrations
+RUN php artisan migrate --force || true
+
+# Rodar seeders
+RUN php artisan db:seed --force || true
+
+# Recriar cache
+RUN php artisan config:cache || true
+RUN php artisan route:cache || true
+RUN php artisan view:cache || true
+
+# ============================================================
+# PERMISSÕES
+# ============================================================
 RUN chown -R www-data:www-data storage bootstrap/cache database \
     && chmod -R 775 storage bootstrap/cache database
 
 EXPOSE 8000
 
-CMD php artisan serve --host=0.0.0.0 --port=8000
+# ============================================================
+# CMD com limpeza de cache
+# ============================================================
+CMD php artisan config:clear \
+    && php artisan cache:clear \
+    && php artisan view:clear \
+    && php artisan route:clear \
+    && php artisan migrate --force \
+    && php artisan db:seed --force \
+    && php artisan config:cache \
+    && php artisan route:cache \
+    && php artisan view:cache \
+    && php artisan serve --host=0.0.0.0 --port=8000
