@@ -76,6 +76,87 @@ class NotificationTemplateSeeder extends Seeder
                 'ativo' => true,
             ],
 
+            // ========== PROPOSTAS ==========
+            [
+                'evento' => 'proposta.nova',
+                'titulo' => 'Nova proposta recebida! 📩',
+                'mensagem' => '{{prestador_nome}} enviou uma proposta para seu pedido #{{pedido_id}} no valor de {{valor}} MZN.',
+                'tipo' => 'proposta',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'proposta.aceita',
+                'titulo' => 'Proposta aceita! 🎉',
+                'mensagem' => 'Sua proposta para o pedido #{{pedido_id}} foi aceita por {{cliente_nome}}.',
+                'tipo' => 'proposta',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'proposta.recusada',
+                'titulo' => 'Proposta recusada ❌',
+                'mensagem' => 'Sua proposta para o pedido #{{pedido_id}} foi recusada por {{cliente_nome}}.',
+                'tipo' => 'proposta',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'proposta.aceita_cliente',
+                'titulo' => 'Proposta aceita! 🎉',
+                'mensagem' => 'Você aceitou a proposta de {{prestador_nome}} no valor de {{proposta_valor}} MZN.',
+                'tipo' => 'proposta',
+                'ativo' => true,
+            ],
+
+            // ========== AGENDAMENTO ==========
+            [
+                'evento' => 'agendamento.criado',
+                'titulo' => '📅 Novo agendamento para {{data}}',
+                'mensagem' => "Olá {{prestador_nome}}!\n\nVocê tem um novo agendamento:\n📅 Data: {{data}}\n🕐 Hora: {{hora}}\n📝 Serviço: {{servico}}\n👤 Cliente: {{cliente_nome}}\n📍 Local: {{endereco}}\n💰 Valor: {{valor}}\n\nAcesse o app para confirmar.",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.confirmado',
+                'titulo' => '✅ Agendamento confirmado para {{data}}',
+                'mensagem' => "Olá {{cliente_nome}}!\n\nSeu agendamento foi confirmado:\n📅 Data: {{data}}\n🕐 Hora: {{hora}}\n📝 Serviço: {{servico}}\n👤 Prestador: {{prestador_nome}}\n📍 Local: {{endereco}}\n💰 Valor: {{valor}}\n\nO prestador já está ciente do agendamento.",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.recusado',
+                'titulo' => '❌ Agendamento recusado para {{data}}',
+                'mensagem' => "Olá {{cliente_nome}}!\n\nInfelizmente o agendamento para {{data}} às {{hora}} foi recusado.\n📝 Serviço: {{servico}}\n👤 Prestador: {{prestador_nome}}\n💬 Motivo: {{motivo}}\n\nTente outro horário ou procure outro prestador.",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.concluido',
+                'titulo' => '✅ Agendamento concluído para {{data}}',
+                'mensagem' => "Olá {{cliente_nome}}!\n\nSeu agendamento foi concluído:\n📅 Data: {{data}}\n🕐 Hora: {{hora}}\n📝 Serviço: {{servico}}\n👤 Prestador: {{prestador_nome}}\n\nAvalie o serviço prestado!",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.cancelado',
+                'titulo' => '❌ Agendamento cancelado para {{data}}',
+                'mensagem' => "Olá {{cliente_nome}}!\n\nO agendamento para {{data}} às {{hora}} foi cancelado.\n📝 Serviço: {{servico}}\n👤 Prestador: {{prestador_nome}}\n💬 Motivo: {{motivo}}",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.lembrete',
+                'titulo' => '🔔 Lembrete: agendamento amanhã às {{hora}}',
+                'mensagem' => "Olá {{cliente_nome}}!\n\nLembrete: você tem um agendamento amanhã ({{data}}) às {{hora}}.\n📝 Serviço: {{servico}}\n👤 Prestador: {{prestador_nome}}\n📍 Local: {{endereco}}\n\nConfirme sua presença!",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'agendamento.lembrete_prestador',
+                'titulo' => '🔔 Lembrete: agendamento amanhã às {{hora}}',
+                'mensagem' => "Olá {{prestador_nome}}!\n\nLembrete: você tem um agendamento amanhã ({{data}}) às {{hora}}.\n📝 Serviço: {{servico}}\n👤 Cliente: {{cliente_nome}}\n📍 Local: {{endereco}}\n\nPrepare-se para o serviço!",
+                'tipo' => 'agendamento',
+                'ativo' => true,
+            ],
+
             // ========== FAVORITOS ==========
             [
                 'evento' => 'favorito.adicionado',
@@ -233,6 +314,20 @@ class NotificationTemplateSeeder extends Seeder
                 'tipo' => 'mensagem',
                 'ativo' => true,
             ],
+            [
+                'evento' => 'mensagem.nova_prestador',
+                'titulo' => 'Nova mensagem de cliente 📱',
+                'mensagem' => '{{cliente_nome}} enviou uma mensagem: "{{mensagem}}"',
+                'tipo' => 'mensagem',
+                'ativo' => true,
+            ],
+            [
+                'evento' => 'mensagem.lidas',
+                'titulo' => 'Mensagens lidas ✅',
+                'mensagem' => '{{prestador_nome}} leu as suas mensagens',
+                'tipo' => 'mensagem',
+                'ativo' => true,
+            ],
 
             // ========== SAQUES ==========
             [
@@ -277,33 +372,6 @@ class NotificationTemplateSeeder extends Seeder
                 'titulo' => 'Dia desbloqueado na agenda ✅',
                 'mensagem' => 'O dia {{data}} foi desbloqueado na sua agenda.',
                 'tipo' => 'sistema',
-                'ativo' => true,
-            ],
-            // Adicionar no NotificationTemplateSeeder
-
-            // ========== MENSAGENS (CHAT) ==========
-
-            [
-                'evento' => 'mensagem.nova',
-                'titulo' => 'Nova mensagem 📧',
-                'mensagem' => '{{remetente}} enviou uma mensagem: "{{mensagem}}"',
-                'tipo' => 'mensagem',
-                'ativo' => true,
-            ],
-
-            [
-                'evento' => 'mensagem.nova_prestador',
-                'titulo' => 'Nova mensagem de cliente 📱',
-                'mensagem' => '{{cliente_nome}} enviou uma mensagem: "{{mensagem}}"',
-                'tipo' => 'mensagem',
-                'ativo' => true,
-            ],
-
-            [
-                'evento' => 'mensagem.lidas',
-                'titulo' => 'Mensagens lidas ✅',
-                'mensagem' => '{{prestador_nome}} leu as suas mensagens',
-                'tipo' => 'mensagem',
                 'ativo' => true,
             ],
         ];

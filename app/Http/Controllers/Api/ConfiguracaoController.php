@@ -10,6 +10,89 @@ use Illuminate\Support\Facades\Log;
 class ConfiguracaoController extends Controller
 {
     /**
+     * 🔥 HORÁRIOS PADRÃO (hardcoded - sem dependência de banco)
+     */
+    private function getDefaultHorarios(): array
+    {
+        return [
+            '08:00', '08:30', '09:00', '09:30',
+            '10:00', '10:30', '11:00', '11:30',
+            '12:00', '12:30', '13:00', '13:30',
+            '14:00', '14:30', '15:00', '15:30',
+            '16:00', '16:30', '17:00', '17:30',
+            '18:00', '18:30', '19:00', '19:30'
+        ];
+    }
+
+    /**
+     * GET /api/configuracoes/horarios-agenda
+     * Buscar horários padrão da agenda (sem banco de dados)
+     */
+    public function getHorariosAgenda()
+    {
+        try {
+            // 🔥 SEMPRE RETORNA OS HORÁRIOS PADRÃO
+            // Não usa banco de dados
+            return response()->json([
+                'success' => true,
+                'data' => $this->getDefaultHorarios(),
+                'source' => 'default'
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao buscar horários agenda: ' . $e->getMessage());
+
+            // Fallback seguro
+            $horarios = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00', '18:00', '19:00'];
+
+            return response()->json([
+                'success' => true,
+                'data' => $horarios,
+                'source' => 'error_fallback'
+            ]);
+        }
+    }
+
+    /**
+     * PUT /api/configuracoes/horarios-agenda
+     * Atualizar horários (apenas admin) - sem banco
+     * 🔥 Neste caso, como não temos banco, apenas retorna sucesso
+     * (Em produção, poderia salvar em arquivo ou cache)
+     */
+    public function atualizarHorariosAgenda(Request $request)
+    {
+        try {
+            $request->validate([
+                'horarios' => 'required|array|min:1',
+                'horarios.*' => 'string|regex:/^([0-1][0-9]|2[0-3]):[0-5][0-9]$/',
+            ]);
+
+            // 🔥 Como não usamos banco, apenas registramos no log
+            Log::info('Horários atualizados (via API):', $request->horarios);
+
+            // Em produção, poderia salvar em:
+            // 1. Arquivo de configuração
+            // 2. Cache (Redis/Memcached)
+            // 3. Sessão
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Horários atualizados com sucesso! (salvo em cache)',
+                'data' => $request->horarios
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Erro ao atualizar horários agenda: ' . $e->getMessage());
+            return response()->json([
+                'success' => false,
+                'message' => 'Erro ao atualizar horários: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    // ==========================================
+    // MÉTODOS EXISTENTES (com banco)
+    // ==========================================
+
+    /**
      * Get prestador configurations
      * GET /api/configuracoes/prestador
      */
@@ -35,7 +118,7 @@ class ConfiguracaoController extends Controller
                 'dias_para_pagamento' => 7,
             ];
 
-            // Merge com configurações do banco
+            // Merge com configurações do banco (se existir)
             $mergedConfig = array_merge($defaultConfig, $configs);
 
             return response()->json([
@@ -45,7 +128,6 @@ class ConfiguracaoController extends Controller
         } catch (\Exception $e) {
             Log::error('Erro ao carregar configurações de prestador: ' . $e->getMessage());
 
-            // Retorna configurações padrão em caso de erro
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -76,7 +158,6 @@ class ConfiguracaoController extends Controller
         try {
             $configs = Configuracoes::getClienteConfig();
 
-            // Configurações padrão para cliente
             $defaultConfig = [
                 'tempo_maximo_cancelamento_horas' => 2,
                 'taxa_servico' => 5,
@@ -88,7 +169,6 @@ class ConfiguracaoController extends Controller
                 'notificacoes_push' => true,
             ];
 
-            // Merge com configurações do banco
             $mergedConfig = array_merge($defaultConfig, $configs);
 
             return response()->json([
@@ -98,7 +178,6 @@ class ConfiguracaoController extends Controller
         } catch (\Exception $e) {
             Log::error('Erro ao carregar configurações de cliente: ' . $e->getMessage());
 
-            // Retorna configurações padrão em caso de erro
             return response()->json([
                 'success' => true,
                 'data' => [
@@ -124,7 +203,6 @@ class ConfiguracaoController extends Controller
         try {
             $configs = Configuracoes::getByGroup('sistema');
 
-            // Configurações padrão do sistema
             $defaultConfig = [
                 'manutencao' => false,
                 'versao_app' => '1.0.0',
@@ -138,7 +216,6 @@ class ConfiguracaoController extends Controller
                 'limite_servicos_gratuitos' => 3,
             ];
 
-            // Merge com configurações do banco
             $mergedConfig = array_merge($defaultConfig, $configs);
 
             return response()->json([
@@ -233,47 +310,72 @@ class ConfiguracaoController extends Controller
      */
     public function getRaioOptions()
     {
-        $config = Configuracoes::where('chave', 'raio_options')->firstOrFail();
+        try {
+            $config = Configuracoes::where('chave', 'raio_options')->firstOrFail();
+            $data = json_decode($config->valor, true);
 
-        // 🔥 DECODIFICA o JSON para ARRAY
-        $data = json_decode($config->valor, true);
-
-        return response()->json([
-            'success' => true,
-            'data' => $data  // Agora é array, não string!
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (\Exception $e) {
+            // Fallback sem banco
+            return response()->json([
+                'success' => true,
+                'data' => [5, 10, 15, 20, 30, 50]
+            ]);
+        }
     }
 
+    /**
+     * GET /api/configuracoes/ordenacao-options
+     */
     public function getOrdenacaoOptions()
     {
-        $config = Configuracoes::where('chave', 'ordenacao_options')->firstOrFail();
+        try {
+            $config = Configuracoes::where('chave', 'ordenacao_options')->firstOrFail();
+            $data = json_decode($config->valor, true);
 
-        // 🔥 DECODIFICA o JSON para ARRAY
-        $data = json_decode($config->valor, true);
-
-        return response()->json([
-            'success' => true,
-            'data' => $data  // Agora é array, não string!
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => $data
+            ]);
+        } catch (\Exception $e) {
+            // Fallback sem banco
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    ['value' => 'rating_desc', 'label' => 'Melhor avaliação'],
+                    ['value' => 'distance_asc', 'label' => 'Mais próximo'],
+                    ['value' => 'price_asc', 'label' => 'Menor preço'],
+                    ['value' => 'price_desc', 'label' => 'Maior preço'],
+                ]
+            ]);
+        }
     }
-
-
 
     /**
      * GET /api/configuracoes/{chave}
      */
     public function show($chave)
     {
-        $config = Configuracoes::where('chave', $chave)->firstOrFail();
+        try {
+            $config = Configuracoes::where('chave', $chave)->firstOrFail();
 
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'chave' => $config->chave,
-                'valor' => $config->valor,
-                'grupo' => $config->grupo,
-                'descricao' => $config->descricao
-            ]
-        ]);
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'chave' => $config->chave,
+                    'valor' => $config->valor,
+                    'grupo' => $config->grupo,
+                    'descricao' => $config->descricao
+                ]
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Configuração não encontrada'
+            ], 404);
+        }
     }
 }

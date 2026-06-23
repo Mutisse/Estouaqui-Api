@@ -7,6 +7,7 @@ use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
+use Illuminate\Database\Eloquent\Casts\Attribute;
 
 class User extends Authenticatable
 {
@@ -30,7 +31,8 @@ class User extends Authenticatable
         'latitude',
         'longitude',
         'raio_atendimento',
-        'configuracoes',  // ✅ ADICIONADO
+        'configuracoes',
+        'role_id',
     ];
 
     protected $hidden = [
@@ -43,11 +45,11 @@ class User extends Authenticatable
         'disponivel' => 'boolean',
         'verificado' => 'boolean',
         'media_avaliacao' => 'decimal:2',
-        'configuracoes' => 'array',  // ✅ ADICIONADO
+        'configuracoes' => 'array',
     ];
 
     // ==========================================
-    // RELACIONAMENTOS
+    // 🔥 RELACIONAMENTOS
     // ==========================================
 
     /**
@@ -60,7 +62,6 @@ class User extends Authenticatable
 
     /**
      * Categorias que o prestador atende (muitos-para-muitos)
-     * Precisa da tabela pivot: categoria_prestador
      */
     public function categorias()
     {
@@ -81,6 +82,22 @@ class User extends Authenticatable
     public function pedidosComoPrestador()
     {
         return $this->hasMany(Pedido::class, 'prestador_id');
+    }
+
+    /**
+     * 🔥 AGENDA - Relacionamento com agenda do prestador
+     */
+    public function agenda()
+    {
+        return $this->hasMany(Agenda::class, 'prestador_id');
+    }
+
+    /**
+     * 🔥 PEDIDOS - Alias para pedidosComoPrestador (para consistência)
+     */
+    public function pedidos()
+    {
+        return $this->pedidosComoPrestador();
     }
 
     /**
@@ -132,15 +149,31 @@ class User extends Authenticatable
     }
 
     /**
-     * Relacionamento com endereços
+     * Endereços do usuário
      */
     public function enderecos()
     {
         return $this->hasMany(Endereco::class);
     }
 
+    /**
+     * Role do usuário
+     */
+    public function role()
+    {
+        return $this->belongsTo(Role::class);
+    }
+
+    /**
+     * Propostas enviadas pelo prestador
+     */
+    public function propostas()
+    {
+        return $this->hasMany(Proposta::class, 'prestador_id');
+    }
+
     // ==========================================
-    // SCOPES (Consultas comuns)
+    // 🔥 SCOPES (Consultas comuns)
     // ==========================================
 
     /**
@@ -183,8 +216,27 @@ class User extends Authenticatable
         return $query->where('verificado', true);
     }
 
+    /**
+     * 🔥 Scope para prestadores disponíveis em uma data/hora específica
+     */
+    public function scopeDisponiveisEm($query, $data, $hora)
+    {
+        return $query->where('disponivel', true)
+            ->where('verificado', true)
+            ->whereDoesntHave('agenda', function ($q) use ($data, $hora) {
+                $q->where('data', $data)
+                    ->where('horario_inicio', '<=', $hora)
+                    ->where('horario_fim', '>=', $hora)
+                    ->where('bloqueado', true);
+            })
+            ->whereDoesntHave('pedidos', function ($q) use ($data, $hora) {
+                $q->where('agendado_para', $data . ' ' . $hora)
+                    ->whereIn('status', ['aceito', 'em_andamento']);
+            });
+    }
+
     // ==========================================
-    // ACCESSORS & MUTATORS
+    // 🔥 ACCESSORS & MUTATORS
     // ==========================================
 
     /**
@@ -210,9 +262,12 @@ class User extends Authenticatable
     public function getAvatarUrlAttribute()
     {
         if ($this->foto) {
+            if (filter_var($this->foto, FILTER_VALIDATE_URL)) {
+                return $this->foto;
+            }
             return asset('storage/' . $this->foto);
         }
-        return 'https://ui-avatars.com/api/?background=667eea&color=fff&bold=true&name=' . urlencode($this->nome);
+        return 'https://ui-avatars.com/api/?background=667eea&color=fff&bold=true&size=120&name=' . urlencode($this->nome);
     }
 
     /**
@@ -236,7 +291,7 @@ class User extends Authenticatable
                 'tema' => 'system',
             ];
         }
-        return json_decode($value, true);
+        return is_array($value) ? $value : json_decode($value, true);
     }
 
     /**
@@ -244,17 +299,17 @@ class User extends Authenticatable
      */
     public function setConfiguracoesAttribute($value)
     {
-        $this->attributes['configuracoes'] = json_encode($value);
+        $this->attributes['configuracoes'] = is_array($value) ? json_encode($value) : $value;
     }
 
     // ==========================================
-    // MÉTODOS AUXILIARES
+    // 🔥 MÉTODOS AUXILIARES
     // ==========================================
 
     /**
      * Check if user is a client
      */
-    public function isCliente()
+    public function isCliente(): bool
     {
         return $this->tipo === 'cliente';
     }
@@ -262,7 +317,7 @@ class User extends Authenticatable
     /**
      * Check if user is a provider
      */
-    public function isPrestador()
+    public function isPrestador(): bool
     {
         return $this->tipo === 'prestador';
     }
@@ -270,15 +325,23 @@ class User extends Authenticatable
     /**
      * Check if user is an admin
      */
-    public function isAdmin()
+    public function isAdmin(): bool
     {
         return $this->tipo === 'admin';
     }
 
     /**
+     * Check if user is root
+     */
+    public function isRoot(): bool
+    {
+        return $this->tipo === 'root' || $this->hasRole('root');
+    }
+
+    /**
      * Check if provider is available
      */
-    public function isDisponivel()
+    public function isDisponivel(): bool
     {
         return $this->isPrestador() && $this->disponivel;
     }
@@ -286,15 +349,45 @@ class User extends Authenticatable
     /**
      * Check if provider is verified
      */
-    public function isVerificado()
+    public function isVerificado(): bool
     {
-        return $this->verificado;
+        return (bool) $this->verificado;
+    }
+
+    /**
+     * 🔥 Verificar se o prestador está disponível em uma data/hora específica
+     */
+    public function isDisponivelEm($data, $hora): bool
+    {
+        if (!$this->isPrestador() || !$this->disponivel || !$this->verificado) {
+            return false;
+        }
+
+        // Verificar se está bloqueado na agenda
+        $bloqueado = Agenda::where('prestador_id', $this->id)
+            ->where('data', $data)
+            ->where('horario_inicio', '<=', $hora)
+            ->where('horario_fim', '>=', $hora)
+            ->where('bloqueado', true)
+            ->exists();
+
+        if ($bloqueado) {
+            return false;
+        }
+
+        // Verificar se já tem pedido na mesma data/hora
+        $ocupado = Pedido::where('prestador_id', $this->id)
+            ->where('agendado_para', $data . ' ' . $hora)
+            ->whereIn('status', ['aceito', 'em_andamento'])
+            ->exists();
+
+        return !$ocupado;
     }
 
     /**
      * Get total favoritos count
      */
-    public function getFavoritosCountAttribute()
+    public function getFavoritosCountAttribute(): int
     {
         return $this->favoritos()->count();
     }
@@ -302,7 +395,7 @@ class User extends Authenticatable
     /**
      * Get total pedidos as client
      */
-    public function getTotalPedidosClienteAttribute()
+    public function getTotalPedidosClienteAttribute(): int
     {
         return $this->pedidosComoCliente()->count();
     }
@@ -310,7 +403,7 @@ class User extends Authenticatable
     /**
      * Get total pedidos as provider
      */
-    public function getTotalPedidosPrestadorAttribute()
+    public function getTotalPedidosPrestadorAttribute(): int
     {
         return $this->pedidosComoPrestador()->count();
     }
@@ -318,7 +411,7 @@ class User extends Authenticatable
     /**
      * Update average rating from new evaluation
      */
-    public function atualizarMediaAvaliacao()
+    public function atualizarMediaAvaliacao(): void
     {
         $media = $this->avaliacoesRecebidas()
             ->where('status', 'aprovada')
@@ -334,8 +427,16 @@ class User extends Authenticatable
         ]);
     }
 
+    /**
+     * 🔥 Verificar se tem role específica
+     */
+    public function hasRole($roleName): bool
+    {
+        return $this->role?->nome === $roleName;
+    }
+
     // ==========================================
-    // ACESSORES PARA DADOS DO PRESTADOR PROFILE
+    // 🔥 ACESSORES PARA DADOS DO PRESTADOR PROFILE
     // ==========================================
 
     /**
@@ -380,24 +481,5 @@ class User extends Authenticatable
             return null;
         }
         return $this->prestadorProfile?->status_documento;
-    }
-
-
-
-    // Adicionar o relacionamento
-    public function role()
-    {
-        return $this->belongsTo(Role::class);
-    }
-
-    // Adicionar métodos auxiliares
-    public function hasRole($roleName): bool
-    {
-        return $this->role?->nome === $roleName;
-    }
-
-    public function isRoot(): bool
-    {
-        return $this->hasRole('root');
     }
 }

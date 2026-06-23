@@ -1,13 +1,17 @@
 <?php
+// app/Http/Controllers/Api/ClientePropostaController.php
 
 namespace App\Http\Controllers\Api;
 
 use App\Models\Proposta;
 use App\Models\Pedido;
+use App\Models\Agenda;
+use App\Models\User;
 use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
 class ClientePropostaController extends BaseController
 {
@@ -77,7 +81,7 @@ class ClientePropostaController extends BaseController
     }
 
     /**
-     * Aceitar uma proposta
+     * 🔥 CORRIGIDO: Aceitar uma proposta com verificação de disponibilidade
      * POST /api/cliente/propostas/{id}/aceitar
      */
     public function aceitar(Request $request, $id)
@@ -106,17 +110,81 @@ class ClientePropostaController extends BaseController
                 ], 422);
             }
 
-            DB::transaction(function () use ($proposta, $user) {
+            // 🔥 VERIFICAR DISPONIBILIDADE DO PRESTADOR
+            $pedido = $proposta->pedido;
+            if ($pedido && $pedido->agendado_para) {
+                $dataAgendada = Carbon::parse($pedido->agendado_para);
+                $data = $dataAgendada->format('Y-m-d');
+                $hora = $dataAgendada->format('H:i');
+
+                // Verificar se o prestador está bloqueado na agenda
+                $bloqueado = Agenda::where('prestador_id', $proposta->prestador_id)
+                    ->where('data', $data)
+                    ->where('horario_inicio', '<=', $hora)
+                    ->where('horario_fim', '>=', $hora)
+                    ->where('bloqueado', true)
+                    ->exists();
+
+                if ($bloqueado) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'O prestador não está mais disponível para esta data/hora. Tente outra data.',
+                        'erro' => 'prestador_indisponivel',
+                        'data' => $data,
+                        'hora' => $hora
+                    ], 422);
+                }
+
+                // Verificar se já tem pedido na mesma data/hora
+                $pedidoExistente = Pedido::where('prestador_id', $proposta->prestador_id)
+                    ->where('agendado_para', $pedido->agendado_para)
+                    ->whereIn('status', ['aceito', 'em_andamento'])
+                    ->where('id', '!=', $pedido->id)
+                    ->exists();
+
+                if ($pedidoExistente) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'O prestador já tem um serviço agendado para esta data/hora',
+                        'erro' => 'horario_ocupado',
+                        'data' => $data,
+                        'hora' => $hora
+                    ], 422);
+                }
+
+                // Verificar disponibilidade global do prestador
+                $prestador = User::find($proposta->prestador_id);
+                if (!$prestador || !$prestador->disponivel) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'O prestador está indisponível no momento',
+                        'erro' => 'prestador_indisponivel'
+                    ], 422);
+                }
+            }
+
+            DB::transaction(function () use ($proposta, $user, $pedido, $dataAgendada, $data, $hora) {
                 // Atualizar status da proposta
                 $proposta->status = 'aceita';
                 $proposta->save();
 
                 // Atualizar o pedido com o prestador escolhido
-                $pedido = $proposta->pedido;
                 if ($pedido) {
                     $pedido->prestador_id = $proposta->prestador_id;
                     $pedido->status = 'aceito';
                     $pedido->save();
+
+                    // 🔥 CRIAR BLOQUEIO NA AGENDA DO PRESTADOR
+                    if (isset($data) && isset($hora) && $pedido->agendado_para) {
+                        Agenda::create([
+                            'prestador_id' => $proposta->prestador_id,
+                            'data' => $data,
+                            'horario_inicio' => $hora,
+                            'horario_fim' => $hora,
+                            'bloqueado' => true,
+                            'observacao' => 'Pedido #' . $pedido->numero . ' - Cliente: ' . $user->nome,
+                        ]);
+                    }
 
                     // Atualizar outras propostas do mesmo pedido para 'recusada'
                     Proposta::where('pedido_id', $pedido->id)
@@ -125,7 +193,7 @@ class ClientePropostaController extends BaseController
                         ->update(['status' => 'recusada']);
                 }
 
-                // Notificar o prestador que a proposta foi aceita
+                // 🔔 NOTIFICAÇÃO: Proposta aceita (para o prestador)
                 NotificationService::send('proposta.aceita', $proposta->prestador_id, [
                     'proposta_id' => $proposta->id,
                     'pedido_id' => $pedido->id ?? null,
@@ -133,13 +201,37 @@ class ClientePropostaController extends BaseController
                     'proposta_valor' => $proposta->valor,
                 ]);
 
-                // Notificar o cliente que a proposta foi aceita
+                // 🔔 NOTIFICAÇÃO: Proposta aceita (para o cliente)
                 NotificationService::send('proposta.aceita_cliente', $user->id, [
                     'proposta_id' => $proposta->id,
                     'pedido_id' => $pedido->id ?? null,
                     'prestador_nome' => $proposta->prestador->nome ?? 'Prestador',
                     'proposta_valor' => $proposta->valor,
                 ]);
+
+                // 🔔 NOTIFICAÇÃO: Agendamento confirmado (para o cliente)
+                if ($pedido && $pedido->agendado_para) {
+                    NotificationService::send('agendamento.confirmado', $pedido->cliente_id, [
+                        'data' => Carbon::parse($pedido->agendado_para)->format('d/m/Y'),
+                        'hora' => Carbon::parse($pedido->agendado_para)->format('H:i'),
+                        'servico' => $pedido->categoria->nome ?? 'Serviço',
+                        'prestador_nome' => $proposta->prestador->nome ?? 'Prestador',
+                        'endereco' => $pedido->endereco ?? 'A definir',
+                        'valor' => $pedido->valor ?? 0,
+                    ]);
+                }
+
+                // 🔔 NOTIFICAÇÃO: Agendamento confirmado (para o prestador)
+                if ($pedido && $pedido->agendado_para) {
+                    NotificationService::send('agendamento.confirmado_prestador', $proposta->prestador_id, [
+                        'data' => Carbon::parse($pedido->agendado_para)->format('d/m/Y'),
+                        'hora' => Carbon::parse($pedido->agendado_para)->format('H:i'),
+                        'servico' => $pedido->categoria->nome ?? 'Serviço',
+                        'cliente_nome' => $user->nome,
+                        'endereco' => $pedido->endereco ?? 'A definir',
+                        'valor' => $pedido->valor ?? 0,
+                    ]);
+                }
             });
 
             return response()->json([
@@ -147,6 +239,7 @@ class ClientePropostaController extends BaseController
                 'message' => 'Proposta aceita com sucesso!',
                 'data' => $proposta->load(['pedido', 'prestador', 'servico'])
             ]);
+
         } catch (\Exception $e) {
             Log::error('Erro ao aceitar proposta: ' . $e->getMessage());
             return response()->json([
@@ -188,17 +281,29 @@ class ClientePropostaController extends BaseController
             $proposta->status = 'recusada';
             $proposta->save();
 
-            // Notificar o prestador que a proposta foi recusada
+            // 🔔 NOTIFICAÇÃO: Proposta recusada (para o prestador)
             NotificationService::send('proposta.recusada', $proposta->prestador_id, [
                 'proposta_id' => $proposta->id,
                 'cliente_nome' => $user->nome,
             ]);
+
+            // 🔔 NOTIFICAÇÃO: Agendamento recusado (para o cliente)
+            if ($proposta->pedido && $proposta->pedido->agendado_para) {
+                NotificationService::send('agendamento.recusado', $user->id, [
+                    'data' => Carbon::parse($proposta->pedido->agendado_para)->format('d/m/Y'),
+                    'hora' => Carbon::parse($proposta->pedido->agendado_para)->format('H:i'),
+                    'servico' => $proposta->pedido->categoria->nome ?? 'Serviço',
+                    'prestador_nome' => $proposta->prestador->nome ?? 'Prestador',
+                    'motivo' => 'Proposta recusada pelo cliente',
+                ]);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Proposta recusada com sucesso',
                 'data' => $proposta->load(['pedido', 'prestador', 'servico'])
             ]);
+
         } catch (\Exception $e) {
             Log::error('Erro ao recusar proposta: ' . $e->getMessage());
             return response()->json([
@@ -234,6 +339,7 @@ class ClientePropostaController extends BaseController
                 'success' => true,
                 'data' => $estatisticas
             ]);
+
         } catch (\Exception $e) {
             Log::error('Erro ao carregar estatísticas: ' . $e->getMessage());
             return response()->json([
@@ -262,6 +368,7 @@ class ClientePropostaController extends BaseController
                 'success' => true,
                 'count' => $count
             ]);
+
         } catch (\Exception $e) {
             Log::error('Erro ao contar propostas pendentes: ' . $e->getMessage());
             return response()->json([
@@ -294,6 +401,7 @@ class ClientePropostaController extends BaseController
                     'proposta_id' => $proposta->id ?? null,
                 ]
             ]);
+
         } catch (\Exception $e) {
             Log::error('Erro ao verificar proposta aceita: ' . $e->getMessage());
             return response()->json([

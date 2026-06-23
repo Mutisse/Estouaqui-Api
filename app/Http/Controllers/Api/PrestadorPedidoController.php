@@ -7,10 +7,11 @@ use Illuminate\Http\Request;
 use App\Models\Pedido;
 use App\Models\Avaliacao;
 use App\Models\Proposta;
+use App\Models\Agenda;
 use App\Services\NotificationService;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
-
+use Illuminate\Support\Facades\Log;
 
 class PrestadorPedidoController extends BaseController
 {
@@ -89,45 +90,108 @@ class PrestadorPedidoController extends BaseController
         ]);
     }
 
+    /**
+     * 🔥 CORRIGIDO: Aceitar pedido com verificação de disponibilidade
+     */
     public function aceitar($id, Request $request)
     {
         $user = $request->user();
 
-        $pedido = Pedido::where('prestador_id', $user->id)
-            ->where('status', 'pendente')
-            ->find($id);
+        try {
+            $pedido = Pedido::where('prestador_id', $user->id)
+                ->where('status', 'pendente')
+                ->find($id);
 
-        if (!$pedido) {
+            if (!$pedido) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Pedido não encontrado ou já processado'
+                ], 404);
+            }
+
+            // 🔥 VERIFICAR DISPONIBILIDADE NA AGENDA
+            $dataAgendada = Carbon::parse($pedido->agendado_para);
+            $data = $dataAgendada->format('Y-m-d');
+            $hora = $dataAgendada->format('H:i');
+
+            // Verificar se está bloqueado na agenda
+            $bloqueado = Agenda::where('prestador_id', $user->id)
+                ->where('data', $data)
+                ->where('horario_inicio', '<=', $hora)
+                ->where('horario_fim', '>=', $hora)
+                ->where('bloqueado', true)
+                ->exists();
+
+            if ($bloqueado) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Você não está disponível para esta data/hora. Verifique sua agenda.',
+                    'erro' => 'agenda_bloqueada',
+                    'data' => $data,
+                    'hora' => $hora
+                ], 422);
+            }
+
+            // Verificar se já tem pedido na mesma data/hora
+            $pedidoExistente = Pedido::where('prestador_id', $user->id)
+                ->where('agendado_para', $pedido->agendado_para)
+                ->whereIn('status', ['aceito', 'em_andamento'])
+                ->exists();
+
+            if ($pedidoExistente) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Você já tem um serviço agendado para esta data/hora',
+                    'erro' => 'horario_ocupado',
+                    'data' => $data,
+                    'hora' => $hora
+                ], 422);
+            }
+
+            DB::transaction(function () use ($pedido, $user, $data, $hora) {
+                $pedido->status = 'aceito';
+                $pedido->save();
+
+                // 🔥 CRIAR BLOQUEIO NA AGENDA PARA ESTE HORÁRIO
+                Agenda::create([
+                    'prestador_id' => $user->id,
+                    'data' => $data,
+                    'horario_inicio' => $hora,
+                    'horario_fim' => $hora,
+                    'bloqueado' => true,
+                    'observacao' => 'Pedido #' . $pedido->numero . ' - ' . ($pedido->cliente->nome ?? 'Cliente'),
+                ]);
+
+                // 🔔 NOTIFICAÇÃO: Pedido aceito (para o cliente)
+                NotificationService::send('pedido.aceito', $pedido->cliente_id, [
+                    'numero' => $pedido->numero,
+                    'pedido_id' => $pedido->id,
+                    'prestador_nome' => $user->nome,
+                    'data' => $pedido->agendado_para,
+                ]);
+
+                // 🔔 NOTIFICAÇÃO: Pedido aceito (para o prestador)
+                NotificationService::send('pedido.aceito_prestador', $user->id, [
+                    'numero' => $pedido->numero,
+                    'cliente_nome' => $pedido->cliente->nome ?? 'Cliente',
+                    'endereco' => $pedido->endereco,
+                    'pedido_id' => $pedido->id,
+                ]);
+            });
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pedido aceito com sucesso',
+                'data' => $pedido->load(['cliente', 'categoria'])
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Erro ao aceitar pedido: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
-                'message' => 'Pedido não encontrado ou já processado'
-            ], 404);
+                'message' => 'Erro ao aceitar pedido: ' . $e->getMessage()
+            ], 500);
         }
-
-        $pedido->status = 'aceito';
-        $pedido->save();
-
-        // 🔔 NOTIFICAÇÃO: Pedido aceito (para o cliente)
-        NotificationService::send('pedido.aceito', $pedido->cliente_id, [
-            'numero' => $pedido->numero,
-            'pedido_id' => $pedido->id,
-            'prestador_nome' => $user->nome,
-            'data' => $pedido->agendado_para,
-        ]);
-
-        // 🔔 NOTIFICAÇÃO: Pedido aceito (para o prestador)
-        NotificationService::send('pedido.aceito_prestador', $user->id, [
-            'numero' => $pedido->numero,
-            'cliente_nome' => $pedido->cliente->nome ?? 'Cliente',
-            'endereco' => $pedido->endereco,
-            'pedido_id' => $pedido->id,
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Pedido aceito com sucesso',
-            'data' => $pedido
-        ]);
     }
 
     public function recusar($id, Request $request)
@@ -221,6 +285,13 @@ class PrestadorPedidoController extends BaseController
         $pedido->concluido_em = Carbon::now();
         $pedido->save();
 
+        // 🔥 REMOVER BLOQUEIO DA AGENDA (se existir)
+        Agenda::where('prestador_id', $user->id)
+            ->where('data', Carbon::parse($pedido->agendado_para)->format('Y-m-d'))
+            ->where('horario_inicio', Carbon::parse($pedido->agendado_para)->format('H:i'))
+            ->where('observacao', 'like', 'Pedido #' . $pedido->numero . '%')
+            ->delete();
+
         // 🔔 NOTIFICAÇÃO: Pedido concluído (para o cliente)
         NotificationService::send('pedido.concluido', $pedido->cliente_id, [
             'numero' => $pedido->numero,
@@ -260,6 +331,13 @@ class PrestadorPedidoController extends BaseController
         $pedido->status = 'cancelado';
         $pedido->save();
 
+        // 🔥 REMOVER BLOQUEIO DA AGENDA SE EXISTIR
+        Agenda::where('prestador_id', $user->id)
+            ->where('data', Carbon::parse($pedido->agendado_para)->format('Y-m-d'))
+            ->where('horario_inicio', Carbon::parse($pedido->agendado_para)->format('H:i'))
+            ->where('observacao', 'like', 'Pedido #' . $pedido->numero . '%')
+            ->delete();
+
         // 🔔 NOTIFICAÇÃO: Pedido cancelado (para o cliente)
         NotificationService::send('pedido.cancelado', $pedido->cliente_id, [
             'numero' => $pedido->numero,
@@ -294,7 +372,6 @@ class PrestadorPedidoController extends BaseController
     {
         $user = $request->user();
 
-        // Obter coordenadas do prestador
         $latitude = $user->prestadorProfile?->latitude;
         $longitude = $user->prestadorProfile?->longitude;
 
@@ -304,7 +381,6 @@ class PrestadorPedidoController extends BaseController
                 $q->select('id', 'nome', 'foto');
             }, 'categoria']);
 
-        // Calcular distância se tiver coordenadas
         if ($latitude && $longitude) {
             $query->select('pedidos.*')
                 ->selectRaw("
@@ -357,7 +433,6 @@ class PrestadorPedidoController extends BaseController
             ], 404);
         }
 
-        // Verificar se já existe proposta
         $propostaExistente = Proposta::where('pedido_id', $pedido->id)
             ->where('prestador_id', $user->id)
             ->first();
@@ -421,7 +496,7 @@ class PrestadorPedidoController extends BaseController
     }
 
     /**
-     * ✅ NOVO MÉTODO: GET /prestador/propostas/check/{pedidoId}
+     * GET /prestador/propostas/check/{pedidoId}
      * Verifica se o prestador já enviou proposta para um pedido específico
      */
     public function verificarProposta(Request $request, $pedidoId)
@@ -432,7 +507,6 @@ class PrestadorPedidoController extends BaseController
             ->where('prestador_id', $user->id)
             ->first();
 
-        // SEMPRE retorna 200, mesmo se não existir proposta
         return response()->json([
             'success' => true,
             'enviou' => !is_null($proposta),
