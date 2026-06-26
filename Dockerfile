@@ -24,9 +24,18 @@ WORKDIR /var/www/html
 # Copy existing application directory
 COPY . .
 
-# 🔥 LIMPAR CACHE DO COMPOSER E TENTAR NOVAMENTE
+# 🔥 CONFIGURAR TOKEN DO GITHUB (se tiver)
+# Você pode passar como build-arg ou usar variável de ambiente
+ARG GITHUB_TOKEN
+ENV GITHUB_TOKEN=${GITHUB_TOKEN}
+
+# 🔥 LIMPAR CACHE E INSTALAR COM CONFIGURAÇÕES ADICIONAIS
 RUN composer clear-cache && \
+    # Tentar instalar com prefer-dist primeiro
     composer install --no-interaction --optimize-autoloader --no-dev --prefer-dist || \
+    # Se falhar, tentar com source
+    composer install --no-interaction --optimize-autoloader --no-dev --prefer-source || \
+    # Última tentativa com ignore-platform-reqs
     composer install --no-interaction --optimize-autoloader --no-dev --prefer-dist --ignore-platform-reqs
 
 # 🔥 LINHA ADICIONADA - FORÇAR CRIAÇÃO DO LINK
