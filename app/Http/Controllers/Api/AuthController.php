@@ -12,13 +12,10 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Auth\Events\PasswordReset;
 use App\Http\Controllers\Controller;
-use Illuminate\Support\Facades\Log; // ← IMPORTAR LOG
+use Illuminate\Support\Facades\Log;
 
 class AuthController extends Controller
 {
-    /**
-     * 🔥 HELPER PARA GERAR URL DE IMAGENS
-     */
     private function getImageUrl(?string $path): ?string
     {
         if (empty($path)) {
@@ -33,9 +30,6 @@ class AuthController extends Controller
         return url('/imagem/' . $path);
     }
 
-    /**
-     * 🔥 LOGIN - COM VERIFICAÇÃO DE STATUS E VERIFICADO
-     */
     public function login(Request $request)
     {
         try {
@@ -51,7 +45,6 @@ class AuthController extends Controller
 
             $user = User::where($field, $login)->first();
 
-            // 🔥 VERIFICAR CREDENCIAIS
             if (!$user || !Hash::check($request->password, $user->password)) {
                 return response()->json([
                     'success' => false,
@@ -59,7 +52,6 @@ class AuthController extends Controller
                 ], 401);
             }
 
-            // 🔥 VERIFICAR STATUS DO UTILIZADOR
             if ($user->status === 'bloqueado') {
                 return response()->json([
                     'success' => false,
@@ -81,7 +73,6 @@ class AuthController extends Controller
                 ], 403);
             }
 
-            // 🔥 VERIFICAR SE O USUÁRIO É VERIFICADO
             if (!$user->verificado) {
                 return response()->json([
                     'success' => false,
@@ -89,17 +80,13 @@ class AuthController extends Controller
                 ], 403);
             }
 
-            // 🔥 SE FOR PRESTADOR E NÃO VERIFICADO, AVISAR
             if ($user->tipo === 'prestador' && !$user->verificado) {
                 $aviso = 'A sua conta está pendente de verificação. Algumas funcionalidades podem estar limitadas.';
             } else {
                 $aviso = null;
             }
 
-            // Remove todos tokens antigos (Sanctum)
             $user->tokens()->delete();
-
-            // Cria novo token (Sanctum)
             $token = $user->createToken('auth_token')->plainTextToken;
 
             return response()->json([
@@ -122,7 +109,6 @@ class AuthController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            // Log do erro
             Log::error('Erro no login: ' . $e->getMessage());
             Log::error($e->getTraceAsString());
 
@@ -133,9 +119,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 LOGOUT
-     */
     public function logout(Request $request)
     {
         try {
@@ -154,9 +137,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 VERIFY TOKEN
-     */
     public function verify(Request $request)
     {
         try {
@@ -195,9 +175,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 USER - DADOS DO USUÁRIO AUTENTICADO
-     */
     public function user(Request $request)
     {
         try {
@@ -229,7 +206,7 @@ class AuthController extends Controller
     }
 
     /**
-     * 🔥 REGISTRO DE USUÁRIO
+     * 🔥 CORRIGIDO: Registro com foto opcional e validação segura
      */
     public function register(Request $request)
     {
@@ -240,19 +217,18 @@ class AuthController extends Controller
                 'telefone' => 'required|string|unique:users,telefone',
                 'password' => 'required|string|min:6',
                 'endereco' => 'nullable|string',
-                'foto' => 'nullable|image|max:5120',
+                'foto' => 'nullable', // 🔥 NÃO VALIDA COMO IMAGEM
                 'sobre' => 'nullable|string',
                 'profissao' => 'nullable|string',
                 'raio_atendimento' => 'nullable|integer|min:1|max:100',
-                'latitude' => 'required|numeric',
-                'longitude' => 'required|numeric',
+                'latitude' => 'nullable|numeric|between:-90,90',
+                'longitude' => 'nullable|numeric|between:-180,180',
                 'categorias' => 'nullable|json',
                 'disponibilidade' => 'nullable|json',
                 'portfolio.*' => 'nullable|image|max:5120',
                 'documento' => 'nullable|file|max:10240',
             ]);
 
-            // ========== DETECTAR TIPO DE PERFIL ==========
             $temDadosPrestador = $request->has('categorias') ||
                 $request->has('disponibilidade') ||
                 $request->hasFile('portfolio') ||
@@ -262,7 +238,6 @@ class AuthController extends Controller
 
             $tipo = $temDadosPrestador ? 'prestador' : 'cliente';
 
-            // ========== CRIAR USUÁRIO ==========
             $userData = [
                 'nome' => $request->nome,
                 'email' => $request->email,
@@ -273,23 +248,33 @@ class AuthController extends Controller
                 'verificado' => $tipo === 'cliente',
             ];
 
-            $user = User::create($userData);
-
-            // ========== PROCESSAR FOTO ==========
-            if ($request->hasFile('foto')) {
-                $path = $request->file('foto')->store('usuarios', 'public');
-                $user->foto = $path;
-                $user->save();
+            if ($request->has('latitude') && $request->latitude !== null) {
+                $userData['latitude'] = $request->latitude;
             }
 
-            // ========== PROCESSAR DADOS DO PRESTADOR ==========
+            if ($request->has('longitude') && $request->longitude !== null) {
+                $userData['longitude'] = $request->longitude;
+            }
+
+            $user = User::create($userData);
+
+            // 🔥 PROCESSAR FOTO - SÓ SE FOR UM ARQUIVO VÁLIDO
+            if ($request->hasFile('foto') && $request->file('foto')->isValid()) {
+                try {
+                    $path = $request->file('foto')->store('usuarios', 'public');
+                    $user->foto = $path;
+                    $user->save();
+                } catch (\Exception $e) {
+                    Log::warning('Erro ao fazer upload da foto: ' . $e->getMessage());
+                }
+            }
+
             if ($tipo === 'prestador') {
                 $user->verificado = false;
                 $user->status = 'pendente';
                 $user->save();
 
                 $profile = $user->prestadorProfile()->create();
-
                 $profileData = [];
 
                 if ($request->has('sobre')) {
@@ -304,11 +289,11 @@ class AuthController extends Controller
                     $profileData['raio_atendimento'] = $request->raio_atendimento;
                 }
 
-                if ($request->has('latitude')) {
+                if ($request->has('latitude') && $request->latitude !== null) {
                     $profileData['latitude'] = $request->latitude;
                 }
 
-                if ($request->has('longitude')) {
+                if ($request->has('longitude') && $request->longitude !== null) {
                     $profileData['longitude'] = $request->longitude;
                 }
 
@@ -323,7 +308,6 @@ class AuthController extends Controller
                     $profile->update($profileData);
                 }
 
-                // Processar categorias
                 if ($request->has('categorias')) {
                     $categorias = json_decode($request->categorias, true);
                     if (is_array($categorias) && count($categorias) > 0) {
@@ -331,7 +315,6 @@ class AuthController extends Controller
                     }
                 }
 
-                // Processar portfolio
                 if ($request->hasFile('portfolio')) {
                     $portfolioPaths = [];
                     foreach ($request->file('portfolio') as $file) {
@@ -342,7 +325,6 @@ class AuthController extends Controller
                     $profile->save();
                 }
 
-                // Processar documento
                 if ($request->hasFile('documento')) {
                     $documentoPath = $request->file('documento')->store('documentos/' . $user->id, 'public');
                     $profile->documento = $documentoPath;
@@ -351,7 +333,6 @@ class AuthController extends Controller
                 }
             }
 
-            // ========== PROCESSAR ENDEREÇO (CLIENTE) ==========
             if ($tipo === 'cliente' && $request->has('endereco')) {
                 $user->enderecos()->create([
                     'endereco' => $request->endereco,
@@ -359,7 +340,6 @@ class AuthController extends Controller
                 ]);
             }
 
-            // ========== NOTIFICAÇÃO ==========
             try {
                 NotificationService::send('sistema.bem_vindo', $user->id, [
                     'nome' => $user->nome
@@ -368,10 +348,8 @@ class AuthController extends Controller
                 Log::error('Erro ao enviar notificação: ' . $e->getMessage());
             }
 
-            // ========== GERAR TOKEN ==========
             $token = $user->createToken('auth_token')->plainTextToken;
 
-            // ========== RESPOSTA ==========
             $userDataResponse = [
                 'id' => $user->id,
                 'nome' => $user->nome,
@@ -382,6 +360,13 @@ class AuthController extends Controller
                 'status' => $user->status,
                 'verificado' => (bool) $user->verificado,
             ];
+
+            if ($user->latitude) {
+                $userDataResponse['latitude'] = (float) $user->latitude;
+            }
+            if ($user->longitude) {
+                $userDataResponse['longitude'] = (float) $user->longitude;
+            }
 
             if ($tipo === 'prestador' && $user->prestadorProfile) {
                 $userDataResponse['sobre'] = $user->prestadorProfile->sobre;
@@ -412,9 +397,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 ATUALIZAR PERFIL
-     */
     public function updateProfile(Request $request)
     {
         try {
@@ -424,6 +406,8 @@ class AuthController extends Controller
                 'nome' => 'sometimes|string|max:255',
                 'email' => 'sometimes|email|unique:users,email,' . $user->id,
                 'telefone' => 'sometimes|string|unique:users,telefone,' . $user->id,
+                'latitude' => 'nullable|numeric|between:-90,90',
+                'longitude' => 'nullable|numeric|between:-180,180',
             ]);
 
             if ($request->has('nome')) {
@@ -436,6 +420,14 @@ class AuthController extends Controller
 
             if ($request->has('telefone')) {
                 $user->telefone = $request->telefone;
+            }
+
+            if ($request->has('latitude') && $request->latitude !== null) {
+                $user->latitude = $request->latitude;
+            }
+
+            if ($request->has('longitude') && $request->longitude !== null) {
+                $user->longitude = $request->longitude;
             }
 
             $user->save();
@@ -460,6 +452,8 @@ class AuthController extends Controller
                     'tipo' => $user->tipo,
                     'status' => $user->status,
                     'verificado' => (bool) $user->verificado,
+                    'latitude' => $user->latitude ? (float) $user->latitude : null,
+                    'longitude' => $user->longitude ? (float) $user->longitude : null,
                 ]
             ]);
 
@@ -472,9 +466,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 UPLOAD FOTO
-     */
     public function uploadFoto(Request $request)
     {
         try {
@@ -522,9 +513,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 SOLICITAR RECUPERAÇÃO DE SENHA
-     */
     public function forgotPassword(Request $request)
     {
         try {
@@ -548,7 +536,6 @@ class AuthController extends Controller
                 ]);
             }
 
-            // TODO: Implementar envio de email/SMS
             return response()->json([
                 'success' => true,
                 'message' => 'Instruções de recuperação enviadas para o seu email/telefone!'
@@ -563,9 +550,6 @@ class AuthController extends Controller
         }
     }
 
-    /**
-     * 🔥 REDEFINIR SENHA
-     */
     public function resetPassword(Request $request, $token)
     {
         try {
